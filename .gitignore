@@ -1,0 +1,53 @@
+# Local environment files; keep the placeholder template public.
+.env
+.env.*
+!.env.example
+.envrc
+
+# Local credentials and key material.
+secrets/
+.secrets/
+.aws/
+.azure/
+.gcloud/
+.npmrc
+credentials*.json
+service-account*.json
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Private working data. Public fixtures must be reviewed and synthetic.
+data/private/
+data/local/
+recordings/
+transcripts/
+uploads/
+exports/
+
+# Node.js dependencies, build output and coverage.
+node_modules/
+dist/
+build/
+coverage/
+.cache/
+.parcel-cache/
+*.tsbuildinfo
+
+# Logs and temporary files.
+logs/
+*.log
+tmp/
+temp/
+*.tmp
+*.swp
+*.swo
+*~
+
+# Local editor and operating-system files.
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
