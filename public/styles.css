@@ -65,6 +65,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   font-weight: 750;
   letter-spacing: -0.6px;
 }
+.brand-connect { color: var(--purple-dark); }
 .brand-mark {
   display: block;
   flex: 0 0 44px;
