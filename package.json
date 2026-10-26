@@ -1,0 +1,13 @@
+{
+  "name": "community-connect",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Synthetic notes to a human-reviewed case for the Meta hackathon.",
+  "engines": { "node": ">=22.19.0" },
+  "scripts": {
+    "start": "node server.mjs",
+    "check:api": "node scripts/check-api.mjs",
+    "test": "node --test"
+  }
+}

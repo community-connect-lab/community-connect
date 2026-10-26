@@ -1,6 +1,7 @@
 # Local environment files; keep the placeholder template public.
 .env
 .env.*
+*.env
 !.env.example
 .envrc
 

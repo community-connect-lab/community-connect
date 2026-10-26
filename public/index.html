@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Community Connect · Reviewed cases</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/app.mjs"></script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">c<span>c</span></span><span>Community Connect</span></div>
+    <span class="milestone">META HACKATHON <span aria-hidden="true">/</span> MILESTONE 01</span>
+  </header>
+
+  <main>
+    <section class="intro" aria-labelledby="page-title">
+      <div>
+        <p class="eyebrow">NOTES TO REVIEWED CASE</p>
+        <h1 id="page-title">A thoughtful draft.<br><span>A human decision.</span></h1>
+        <p class="intro-copy">Turn agent notes into a clear case summary. Compare it with the source, make it your own, then review before exporting.</p>
+      </div>
+      <aside class="demo-card" aria-label="Demo boundaries">
+        <span class="synthetic-badge"><span aria-hidden="true">●</span> SYNTHETIC DEMO</span>
+        <p>Simulated support call.<br>Human review at every handoff.</p>
+        <span class="muted">No live calls or transcription.</span>
+      </aside>
+    </section>
+
+    <ol class="steps" aria-label="Case workflow">
+      <li><span class="step-number">1</span><span>Read &amp; edit notes</span></li>
+      <li><span class="step-number">2</span><span>Generate &amp; refine</span></li>
+      <li><span class="step-number">3</span><span>Review &amp; export</span></li>
+    </ol>
+
+    <div id="load-status" class="notice" role="status">Loading the synthetic scenario…</div>
+    <div id="error-message" class="notice notice-error" role="alert" hidden></div>
+
+    <div class="workspace" id="workspace" hidden>
+      <section class="panel source-panel" aria-labelledby="source-heading">
+        <div class="panel-heading">
+          <div><p class="eyebrow">01 / SOURCE</p><h2 id="source-heading">Agent notes</h2></div>
+          <span class="small-badge">SYNTHETIC</span>
+        </div>
+        <div class="scenario-card">
+          <span class="scenario-label">SIMULATED SUPPORT CALL</span>
+          <h3 id="scenario-title"></h3>
+          <p>Use synthetic details only. These notes are the source for your draft.</p>
+        </div>
+        <label class="field-label" for="agent-notes">Editable source notes</label>
+        <textarea id="agent-notes" maxlength="12000" rows="12" spellcheck="true" aria-describedby="notes-help notes-count"></textarea>
+        <div class="field-meta"><span id="notes-help">Keep facts, open questions and promises distinct.</span><span id="notes-count"></span></div>
+        <button class="text-button" id="reset-scenario" type="button">Restore original synthetic notes</button>
+
+        <fieldset class="mode-selector" id="mode-selector">
+          <legend>Draft source</legend>
+          <label class="mode-option"><input type="radio" name="draft-mode" value="meta" checked><span><strong>Real Meta Model API</strong><small>Send these synthetic notes to the configured backend model.</small></span></label>
+          <label class="mode-option"><input type="radio" name="draft-mode" value="simulation"><span><strong>Simulated summary</strong><small>Explicit demo mode. No model API request is made.</small></span></label>
+        </fieldset>
+        <p id="model-status" class="model-status"></p>
+        <div id="simulation-notice" class="simulation-notice" hidden>SIMULATED SUMMARY SELECTED — a source-copy practice draft, with no model API call. Edit all four fields before reviewing.</div>
+        <button id="generate-draft" class="button button-primary" type="button">Generate draft <span aria-hidden="true">↗</span></button>
+        <p class="fine-print">Generation creates a draft only. It does not contact a caller or take case actions.</p>
+      </section>
+
+      <section class="panel draft-panel" aria-labelledby="draft-heading">
+        <div class="panel-heading">
+          <div><p class="eyebrow">02 / DRAFT</p><h2 id="draft-heading">Case summary</h2></div>
+          <span id="draft-status" class="small-badge">AWAITING DRAFT</span>
+        </div>
+        <div id="draft-empty" class="empty-state">
+          <span class="empty-icon" aria-hidden="true">✎</span>
+          <h3>Your notes, made clearer.</h3>
+          <p>Generate a draft, then compare each section with the source. You remain responsible for the reviewed case.</p>
+        </div>
+        <div id="draft-content" hidden>
+          <div id="draft-provenance" class="provenance" role="status"></div>
+          <div id="source-changed" class="notice notice-warning" hidden></div>
+          <div class="draft-field"><label for="draft-enquiry">Enquiry</label><p>What is the caller asking for?</p><textarea id="draft-enquiry" data-field="enquiry" rows="3" maxlength="12000" spellcheck="true"></textarea></div>
+          <div class="draft-field"><label for="draft-relevantDetails">Relevant details</label><p>Keep only facts supported by the notes.</p><textarea id="draft-relevantDetails" data-field="relevantDetails" rows="4" maxlength="12000" spellcheck="true"></textarea></div>
+          <div class="draft-field"><label for="draft-uncertainties">Missing or uncertain information</label><p>Show what still needs to be checked.</p><textarea id="draft-uncertainties" data-field="uncertainties" rows="3" maxlength="12000" spellcheck="true"></textarea></div>
+          <div class="draft-field"><label for="draft-nextSteps">Suggested next steps</label><p>Proposals for a person to assess; no actions run automatically.</p><textarea id="draft-nextSteps" data-field="nextSteps" rows="4" maxlength="12000" spellcheck="true"></textarea></div>
+        </div>
+      </section>
+    </div>
+
+    <section class="review-panel" id="review-panel" aria-labelledby="review-heading" hidden>
+      <div class="review-copy"><p class="eyebrow">03 / HUMAN REVIEW</p><h2 id="review-heading">Ready to make it a reviewed case?</h2><p id="review-help">Generate a draft to begin your review.</p></div>
+      <div class="review-actions">
+        <label class="review-check" for="human-review"><input type="checkbox" id="human-review" disabled><span>I compared the draft with the source notes and reviewed the facts, uncertainty and proposed next steps.</span></label>
+        <button class="button button-export" type="button" id="export-case" disabled>Export reviewed case <span aria-hidden="true">↓</span></button>
+        <p class="fine-print">Downloads JSON to your device. Edits or regeneration require a fresh review.</p>
+      </div>
+    </section>
+    <p id="activity-status" class="activity-status" role="status" aria-live="polite"></p>
+  </main>
+
+  <footer><span>Community Connect</span><span>Synthetic data. Human judgement. <span aria-hidden="true">✳</span></span></footer>
+  <noscript><p class="notice notice-error">Enable JavaScript to use the notes-to-reviewed-case workflow.</p></noscript>
+</body>
+</html>
