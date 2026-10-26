@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title description">
+  <title id="title">Community Connect</title>
+  <desc id="description">Two interlocking Cs in BasilMinTyme green and Women Build Apps purple.</desc>
+  <rect width="1024" height="1024" fill="#f7faf8"/>
+  <path d="M 576.777 616.777 A 250 250 0 1 1 576.777 263.223" fill="none" stroke="#2f8a56" stroke-width="100" stroke-linecap="round"/>
+  <path d="M 816.777 806.777 A 250 250 0 1 1 816.777 453.223" fill="none" stroke="#9b6dff" stroke-width="100" stroke-linecap="round"/>
+</svg>

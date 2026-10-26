@@ -26,6 +26,12 @@ All demo data must be synthetic. The source notes remain visible beside the four
 
 The notes application runs locally. A separate webhook receiver can be deployed to Render. The public repository contains no runtime credentials; `.env.example` contains placeholders and non-secret defaults.
 
+## Interface theme
+
+The interface combines [BasilMinTyme](https://www.basilmintyme.com/) green (`#2f8a56`) and [Women Build Apps](https://www.womenbuildapps.com/) purple (`#9b6dff`) with light backgrounds and white panels. Darker green and purple variants keep small text and button labels readable. Source notes use green accents; drafting and review use purple accents, while warnings and errors retain separate semantic colours.
+
+The header and browser icon use `assets/meta-app-icon.svg`. The matching 1024 × 1024 PNG at `assets/meta-app-icon-1024.png` is suitable for Meta's app-icon upload. The notes server exposes the SVG only through its explicit `/brand-icon.svg` asset route.
+
 ## Windows setup and start
 
 Requires **Node.js 22.19 or newer**. There are no runtime or development package dependencies and no build step. In PowerShell:

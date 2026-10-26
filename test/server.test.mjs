@@ -31,14 +31,14 @@ test('bootstrap and allowlisted browser assets never expose backend credentials 
   assert.equal(bootstrap.status, 200);
   const body = await bootstrap.json();
   assert.deepEqual(body, { scenario, apiConfigured: true, model: config.model });
-  for (const path of ['/', '/styles.css', '/app.mjs', '/workflow.mjs']) {
+  for (const path of ['/', '/styles.css', '/app.mjs', '/workflow.mjs', '/brand-icon.svg']) {
     const response = await fetch(base + path);
     assert.equal(response.status, 200, path);
     assert.ok(!(await response.text()).includes(TEST_KEY), path);
     assert.equal(response.headers.get('cache-control'), 'no-store');
     assert.match(response.headers.get('content-security-policy'), /connect-src 'self'/);
   }
-  for (const path of ['/.env', '/Community%20Connect.env', '/.env.example', '/.git/config', '/lib/config.mjs', '/server.mjs', '/../.env', '/%2e%2e%2f.env']) {
+  for (const path of ['/.env', '/Community%20Connect.env', '/.env.example', '/.git/config', '/lib/config.mjs', '/server.mjs', '/assets/meta-app-icon.svg', '/assets/meta-app-icon-1024.png', '/../.env', '/%2e%2e%2f.env']) {
     const response = await fetch(base + path);
     assert.equal(response.status, 404, path);
     assert.ok(!(await response.text()).includes(TEST_KEY));

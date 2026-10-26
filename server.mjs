@@ -8,11 +8,12 @@ import { scenario, simulateDraft } from './lib/scenario.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const assets = new Map([
-  ['/', ['index.html', 'text/html; charset=utf-8']],
-  ['/index.html', ['index.html', 'text/html; charset=utf-8']],
-  ['/styles.css', ['styles.css', 'text/css; charset=utf-8']],
-  ['/app.mjs', ['app.mjs', 'text/javascript; charset=utf-8']],
-  ['/workflow.mjs', ['workflow.mjs', 'text/javascript; charset=utf-8']],
+  ['/', ['public/index.html', 'text/html; charset=utf-8']],
+  ['/index.html', ['public/index.html', 'text/html; charset=utf-8']],
+  ['/styles.css', ['public/styles.css', 'text/css; charset=utf-8']],
+  ['/app.mjs', ['public/app.mjs', 'text/javascript; charset=utf-8']],
+  ['/workflow.mjs', ['public/workflow.mjs', 'text/javascript; charset=utf-8']],
+  ['/brand-icon.svg', ['assets/meta-app-icon.svg', 'image/svg+xml']],
 ]);
 const MAX_BODY_BYTES = 65536;
 const MAX_NOTES = 12000;
@@ -111,7 +112,7 @@ export function createApp(config, { generate = generateDraft } = {}) {
       }
       const asset = assets.get(pathname);
       if (request.method === 'GET' && asset) {
-        const content = await readFile(resolve(root, 'public', asset[0]));
+        const content = await readFile(resolve(root, asset[0]));
         response.writeHead(200, { 'Content-Type': asset[1] });
         response.end(content);
         return;
