@@ -24,7 +24,7 @@ All demo data must be synthetic. The source notes remain visible beside the four
 - Git branch: `main`.
 - GitHub remote: `https://github.com/community-connect-lab/community-connect.git`.
 
-The application runs locally. The public repository contains no runtime credentials; `.env.example` contains a placeholder key and non-secret defaults.
+The notes application runs locally. A separate webhook receiver can be deployed to Render. The public repository contains no runtime credentials; `.env.example` contains placeholders and non-secret defaults.
 
 ## Windows setup and start
 
@@ -93,13 +93,55 @@ npm.cmd test
 
 **Verified on 26 October 2026 using Node.js 22.19.0:**
 
-- All **43 automated tests passed**, using synthetic fixtures and fake provider responses. Coverage includes output parsing across reasoning/message blocks, malformed/refused/incomplete output, HTTP/network/timeout failures, bounded streaming responses, backend secret/static-file isolation, input/origin validation, explicit simulation, preservation of edits, stale-response rejection and review/export invalidation. Five controller checks exercise the actual browser controller against a test DOM, including input events, the review checkbox, failed regeneration, and the JSON Blob and filename created by export.
+- All **61 automated tests passed**: 43 notes-workflow checks and 18 webhook checks. They use synthetic fixtures and fake provider responses. Notes-workflow coverage includes output parsing across reasoning/message blocks, malformed/refused/incomplete output, HTTP/network/timeout failures, bounded streaming responses, backend secret/static-file isolation, input/origin validation, explicit simulation, preservation of edits, stale-response rejection and review/export invalidation. Five controller checks exercise the actual browser controller against a test DOM, including input events, the review checkbox, failed regeneration, and the JSON Blob and filename created by export. Webhook coverage includes GET verification, raw-body HMAC, malformed/tampered events, bounded request bodies, phone filtering, secret isolation and safe event counts.
 - A small **real Meta API request passed**, returning the expected `OK` through the backend client with `store:false`.
 - A full **real synthetic draft passed** through the local HTTP backend, Meta API, four-field parser and client workflow state. JSON serialization was blocked before review, permitted after review, and blocked again after draft/source edits.
 - A subsequent checkpoint inspected the real draft: Thursday availability remained unconfirmed, no collection change was claimed, and next steps remained conditional proposals. A reviewed JSON file was saved and reloaded; all four draft fields matched the human-edited content exactly, with matching source notes and provenance. Regeneration and source/draft edits revoked review. Checkpoint artifacts stay ignored in `tmp/`; they are not application storage.
 - HTTP checks verified the page, browser assets and bootstrap endpoint. `.env` and alternate `*.env` filenames are ignored and cannot be served by the static asset allowlist.
 
 Browser control was unavailable for the checkpoint, so visual layout and an actual browser download-manager interaction have not been verified. The controller's export click handler, generated Blob contents, filename and gate logic were tested programmatically. To check the final browser interaction manually, generate a draft, confirm export is disabled, review and download, then edit notes or a draft field and confirm export is disabled again.
+
+## Deploy the separate webhook receiver on Render
+
+`webhook-server.mjs` is a small, dependency-free receiver. It answers Meta's verification challenge and verifies POST events with raw-body HMAC-SHA256 using the **Community Connect App secret**. It acknowledges valid events and logs fixed event counts only; it does not persist or forward caller IDs, numbers, message text, SDP or raw event payloads. A phone-number filter can ignore events for other numbers. This receiver does **not** answer calls, negotiate media, record audio, transcribe or generate summaries.
+
+The local notes app still starts with `npm.cmd start`. The separate receiver starts with `npm.cmd run start:webhook`; its default local port is 10000. It reads only webhook settings from the local `.env` or process environment. The notes app's `.env` `PORT=3000` is ignored by the receiver; use `WEBHOOK_PORT` for a different local webhook port. Render's process `PORT` takes priority, and the receiver binds to `0.0.0.0`.
+
+In Render:
+
+1. Select **New → Web Service**. Connect `https://github.com/community-connect-lab/community-connect`. The **Public Git Repository** option needs no GitHub repository permissions, but requires manual deploys for later source updates; a Git-provider connection can support automatic deploys.
+2. Configure the following values:
+
+| Setting | Value |
+| --- | --- |
+| Name | `community-connect-webhook` or another available service name |
+| Runtime | Node |
+| Branch | `main` |
+| Root Directory | Leave empty |
+| Build Command | `npm ci --omit=dev` |
+| Start Command | `npm run start:webhook` |
+| Health Check Path | `/health` |
+| Instance | Small paid, always-on instance for real-call testing; a sleeping free service is unsuitable for reliable call signalling |
+
+3. Add these environment variables directly in Render. Keep their values out of screenshots, GitHub and chat:
+
+| Variable | Value |
+| --- | --- |
+| `WHATSAPP_VERIFY_TOKEN` | A random secret of at least 32 characters. Use exactly the same value in Meta's **Verify token** field. This is a locally chosen secret, not a Graph token. |
+| `WHATSAPP_APP_SECRET` | The **Community Connect** App secret from Meta **App settings → Basic**. Do not substitute a user/system-user access token. |
+| `WHATSAPP_PHONE_NUMBER_ID` | The test **Phone number ID** from API Setup; recommended filter for shared assets. Use the phone ID, not the phone number or WABA ID. |
+
+The webhook receiver does not need `MODEL_API_KEY` or `WHATSAPP_ACCESS_TOKEN`. Leave `PORT` to Render's provided environment. No disk or database is required for this receiver.
+
+4. Create/deploy the service. Check that `https://YOUR-SERVICE.onrender.com/health` returns HTTP 200 with `status: "ok"` and `callHandling: "not_implemented"`. The displayed service URL is authoritative; the example name is not a reserved URL.
+5. In **Community Connect → WhatsApp → Configuration**, set **Callback URL** to `https://YOUR-SERVICE.onrender.com/webhooks/whatsapp`. Enter the same `WHATSAPP_VERIFY_TOKEN` value and click **Verify and save**. Keep the existing apps' callbacks and subscriptions unchanged.
+6. Use Meta's dashboard webhook tests to verify delivery and inspect Render logs for the `whatsapp_webhook_received` count summary. A sample event for a different phone ID is acknowledged but counted as ignored when filtering is enabled. Failed signatures return 403; valid signed malformed payloads return 400. Never disable signature verification to make a test pass.
+
+Meta's dashboard warns that this unpublished app receives dashboard test webhooks only. No public-test-number exemption was verified for real inbound-call events. Complete the app's **Publish** requirements before relying on real call delivery; callback verification and a successful dashboard test do not establish end-to-end Calling.
+
+Verified locally: 18 receiver utility/HTTP tests. Render deployment, Meta verification and dashboard-event delivery remain pending until configured in the actual accounts. The browser WebRTC answering path is a later implementation step.
+
+References: [Render web services](https://render.com/docs/web-services), [Render free-instance limitations](https://render.com/docs/free), [Meta webhook verification and signatures](https://developers.facebook.com/documentation/business-messaging/whatsapp/webhooks/create-webhook-endpoint), [Meta publishing requirements](https://developers.facebook.com/documentation/development/create-an-app/whatsapp-use-case#publish).
 
 ## Meta Model API: verified contract
 
@@ -130,7 +172,7 @@ Official references: [overview](https://dev.meta.ai/docs/overview), [authenticat
 
 ## Next milestone: a human answers a real inbound WhatsApp call
 
-Scope: a test person calls from WhatsApp, a human agent answers and speaks with them, then enters **manual agent notes** in the existing summary workflow. Keep the support scenario fictional and the notes synthetic. Recording, transcription, automated voice responses and outbound calling are outside this milestone. Calling is not implemented yet.
+Scope: a test person calls from WhatsApp, a human agent answers and speaks with them, then enters **manual agent notes** in the existing summary workflow. Keep the support scenario fictional and the notes synthetic. Recording, transcription, automated voice responses and outbound calling are outside this milestone. The webhook receiver above is implemented; call answering and media are not implemented yet.
 
 ### Verified test routes and account requirements
 
@@ -160,7 +202,7 @@ Use WhatsApp on an iPhone or Android phone for the test caller. The agent needs 
 
 Keep the summary application on localhost. Expose only a dedicated signed webhook/Calling gateway through the selected HTTPS domain or tunnel, with controlled agent access. Do not publish the current model-key-backed local summary server wholesale. SIP remains a supported alternative if appropriate PBX/softphone infrastructure already exists. [Integration examples](https://developers.facebook.com/documentation/business-messaging/whatsapp/calling/integration-examples)
 
-**Remaining blockers:** shared-asset subscriptions and actual Calling access still need read-only verification in Meta; a signed public webhook gateway, SDP broker and human-answer WebRTC interface have not been built or tested. Account permission toggles alone do not provide two-way audio. No Meta account settings were changed during this investigation.
+**Remaining blockers:** shared-asset `calls` subscriptions still need inspection; the signed receiver needs Render deployment and Meta verification; app publication, an SDP broker and a human-answer WebRTC interface are still required before a real call test. Account permission toggles alone do not provide two-way audio. No existing app callbacks or shared phone settings were changed by this implementation.
 
 ## Small implementation plan
 

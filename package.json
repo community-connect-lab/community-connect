@@ -7,6 +7,7 @@
   "engines": { "node": ">=22.19.0" },
   "scripts": {
     "start": "node server.mjs",
+    "start:webhook": "node webhook-server.mjs",
     "check:api": "node scripts/check-api.mjs",
     "test": "node --test"
   }
