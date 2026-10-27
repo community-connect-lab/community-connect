@@ -15,7 +15,7 @@ Summaries must be grounded in agent notes or a transcript obtained through a ver
 
 Milestone 1 is implemented: a dependency-free Node.js backend and browser interface turn **editable synthetic agent notes from a simulated support call** into a draft, require human review, and export the reviewed case as a local JSON download. Real Meta generation is the default. A source-copy simulation is available only through explicit selection and is labelled in the interface and exported case.
 
-All demo data must be synthetic. The source notes remain visible beside the four editable draft sections: enquiry, relevant details, missing or uncertain information, and suggested next steps. A separate Calling gateway and browser WebRTC agent are now implemented locally, including Answer, Reject and Hang up. This gateway has not been deployed or verified with a real Meta call; two-way audio remains unverified. Recording, transcription, automated voice responses and outbound calling are not implemented.
+All demo data must be synthetic. The source notes remain visible beside the four editable draft sections: enquiry, relevant details, missing or uncertain information, and suggested next steps. A separate Calling gateway and browser WebRTC agent are implemented and deployed, including Answer, Reject and Hang up. The deployed health and agent-page endpoints respond successfully; browser microphone operation, real Meta calls and two-way audio remain unverified. Recording, transcription, automated voice responses and outbound calling are not implemented.
 
 ## Workspace and Git
 
@@ -24,7 +24,7 @@ All demo data must be synthetic. The source notes remain visible beside the four
 - Git branch: `main`.
 - GitHub remote: `https://github.com/community-connect-lab/community-connect.git`.
 
-The notes application runs locally. A separate webhook receiver is deployed to Render, as reported in the user-verified checkpoint below. The public repository contains no runtime credentials; `.env.example` contains placeholders and non-secret defaults.
+The notes application runs locally. The separate Render service now runs the Calling gateway, following the receiver-only checkpoint below. The public repository contains no runtime credentials; `.env.example` contains placeholders and non-secret defaults.
 
 ## Interface theme
 
@@ -109,6 +109,8 @@ Browser control was unavailable for the checkpoint, so visual layout and an actu
 
 **Calling implementation verified locally on 27 October 2026:** `npm.cmd test -- --test-reporter=dot` passed all **107 tests**: the 61 existing checks plus 7 Calling API, 20 broker, 7 gateway HTTP and 12 agent-controller checks. The new checks use synthetic fixtures and fake Graph responses; they make no live Meta requests. They cover action payloads, signed/filtered webhook handling, stale-event rejection, single-agent ownership, timeouts and uncertain outcomes, authentication/origin restrictions, secret isolation, cancellation and late-response races, and withholding the microphone sender until acceptance. Native browser preview could not establish the current Chrome URL, so no screenshot or visual QA was achieved. Real Meta acceptance of the initial answer with no attached microphone track, media connectivity and two-way audio remain unverified.
 
+Subsequent local startup, call-error diagnostic and browser-state fixes passed **141 tests**. These changes are not part of the deployed `9be6f64` revision. The focused checks include preserving permission failures through the broker and HTTP boundary, rejecting unsafe diagnostic fields, clearing failed-call messages on termination, preventing stale snapshots from restoring Answer, and distinguishing a call that ended before audio connected from a connected conversation.
+
 ## Deploy the separate webhook receiver on Render
 
 `webhook-server.mjs` is a small, dependency-free receiver. It answers Meta's verification challenge and verifies POST events with raw-body HMAC-SHA256 using the **Community Connect App secret**. It acknowledges valid events and logs fixed event counts only; it does not persist or forward caller IDs, numbers, message text, SDP or raw event payloads. A phone-number filter can ignore events for other numbers. This receiver does **not** answer calls, negotiate media, record audio, transcribe or generate summaries.
@@ -154,7 +156,11 @@ Callback verification and a successful dashboard test do not establish end-to-en
 - A real incoming WhatsApp reply was correlated with the Render log at `08:46:24`, showing `messages: 1` and `ignoredChanges: 0`.
 - `POST /PHONE_NUMBER_ID/settings` returned `success: true`. A following GET returned `calling.status: "ENABLED"`, `call_icon_visibility: "DEFAULT"` and `callback_permission_status: "DISABLED"`. `storage_configuration.status: "DEFAULT"` was unchanged. SIP status and Calling eligibility beyond the accepted settings remain unverified.
 
-The receiver's 18 utility/HTTP tests remain part of the passing suite. Its `callHandling: "not_implemented"` health value describes the receiver-only process. The locally implemented Calling gateway described below reports `callHandling: "agent_gateway"`; it has not yet replaced the Render receiver. Use an always-on service for reliable real-call testing; the Free plan's sleep behaviour remains a limitation.
+The receiver's 18 utility/HTTP tests remain part of the passing suite. Its `callHandling: "not_implemented"` health value describes the historical receiver-only process. The Calling gateway has now replaced that process on Render, as checked below. Use an always-on service for reliable real-call testing; the last reported Free plan's sleep behaviour remains a limitation.
+
+**Render gateway checkpoint — 27 October 2026:** the user reports adding the missing `WHATSAPP_ACCESS_TOKEN` and successfully deploying revision `9be6f64`. Independent HTTP reads returned **200** from `https://community-connect-webhook.onrender.com/health` with `status: "ok"`, `service: "community-connect-calling"` and `callHandling: "agent_gateway"`; `/agent` also returned **200** and contained the Call desk and Connect desk interface text. These checks confirm startup and page delivery, not visual rendering, microphone access, Graph call actions or audio. Render was last reported as **Free**; no plan change was performed by this implementation.
+
+**First incoming-call attempt — 27 October 2026:** the user reports that the desk rang, Answer did not stop the caller's ringing, and the caller's hang-up ended the desk call. Render logs show `CALL_API_PERMISSION`. In that deployed revision this code maps Meta error code `10` or `200`; it establishes a call-control permission rejection, without identifying the precise scope/app/asset cause. Two-way audio remains unverified. The browser also retained the old setup error after termination; the local fixes above clear that stale state and label an unconnected call accurately.
 
 References: [Render web services](https://render.com/docs/web-services), [Render free-instance limitations](https://render.com/docs/free), [Meta webhook verification and signatures](https://developers.facebook.com/documentation/business-messaging/whatsapp/webhooks/create-webhook-endpoint), [Meta publishing requirements](https://developers.facebook.com/documentation/development/create-an-app/whatsapp-use-case#publish).
 
@@ -176,9 +182,9 @@ npm.cmd run start:calling
 
 Open **http://127.0.0.1:10000/agent**. Local startup alone does not make Meta deliver webhooks to this computer; real delivery uses the deployed HTTPS gateway. The gateway ignores the notes app's local `.env` `PORT=3000`; use `CALLING_PORT` locally, while Render's process `PORT` takes priority. Stop any receiver-only process using the same port first. Keep the summary app running separately with `npm.cmd start` at `http://localhost:3000`.
 
-## Migrate the existing Render service to Calling
+## Render migration reference
 
-The current Render service still runs the receiver-only code. Publish the reviewed implementation to GitHub before asking Render to deploy it; otherwise `start:calling` may not exist in the deployed revision.
+The receiver-to-gateway migration succeeded for revision `9be6f64`; the steps below remain a configuration and redeployment reference. Publish reviewed source changes to GitHub before asking Render to deploy them. The always-on instance recommendation and first real call test remain outstanding.
 
 1. Review the implementation, run `npm.cmd test`, and stage only the intended files. These commands deliberately name the implementation files and leave local policy drafts outside the commit:
 
@@ -202,10 +208,10 @@ git push origin main
 | `WHATSAPP_GRAPH_VERSION` | `v26.0` |
 | `CALLING_PUBLIC_ORIGIN` | `https://community-connect-webhook.onrender.com` — exact origin, no `/agent` path. |
 
-3. Change **Start Command** to `npm run start:calling`. Retain **Build Command** `npm ci --omit=dev` and **Health Check Path** `/health`. Use **one always-on instance** for the real call test: the broker lives in memory and does not support multiple instances. Render is currently Free; an always-on instance change has not been performed. Let Render supply `PORT`; do not add the Model API key to this service.
+3. Set **Start Command** to `npm run start:calling`. Retain **Build Command** `npm ci --omit=dev` and **Health Check Path** `/health`. Use **one always-on instance** for the real call test: the broker lives in memory and does not support multiple instances. Render was last reported as Free; an always-on instance change has not been performed by this implementation. Let Render supply `PORT`; do not add the Model API key to this service.
 4. Deploy the reviewed GitHub revision. A public-repository connection requires a manual deploy for source changes. Check `https://community-connect-webhook.onrender.com/health` for HTTP 200, `status: "ok"` and `callHandling: "agent_gateway"`. This confirms which process is running; it does not verify Graph access or audio.
 5. Retain the existing Meta callback **`https://community-connect-webhook.onrender.com/webhooks/whatsapp`** and verification token. The gateway preserves its path and signed GET/POST handling; no replacement callback is needed. Preserve the published app's working subscriptions. Before the call test, inspect the intended number's current SIP configuration and shared-number/WABA routing. This gateway needs Graph/webhook signalling; do not overwrite unknown SIP settings or another project's routing to force a test.
-6. Open **https://community-connect-webhook.onrender.com/agent** and follow the desk flow below. The deployment and first real call remain manual verification steps.
+6. Open **https://community-connect-webhook.onrender.com/agent** and follow the desk flow below. HTTP page delivery is verified; browser microphone operation and the first real call remain manual verification steps.
 
 ## Use the agent desk for a synthetic call test
 
@@ -220,6 +226,16 @@ The broker temporarily keeps only the call IDs and SDP needed for the active cal
 The browser currently has no configurable STUN/TURN path. Meta's ICE-lite peer can work with direct browser connectivity, but restrictive networks may prevent audio; a TURN configuration would be additional implementation work. Actual Meta acceptance of the initial answer without a microphone sender and real two-way audio are still unverified. These limits must be resolved through the first live test, not inferred from passing fake-response tests or an enabled Calling setting.
 
 Protocol references checked against primary documentation on 27 October 2026: [Meta user-initiated calls](https://developers.facebook.com/documentation/business-messaging/whatsapp/calling/user-initiated-calls), [Calling FAQ and browser SDP guidance](https://developers.facebook.com/documentation/business-messaging/whatsapp/calling/faq), [Calls API](https://developers.facebook.com/documentation/business-messaging/whatsapp/reference/whatsapp-business-phone-number/calling-api), [WebRTC sender track](https://w3c.github.io/webrtc-pc/#dom-rtcrtpsender-track), [WebRTC replaceTrack](https://w3c.github.io/webrtc-pc/#dom-rtcrtpsender-replacetrack).
+
+### If Meta denies a call action
+
+`CALL_API_PERMISSION` means Meta denied the gateway's call-control request. Webhook delivery authenticates with the App secret and does not prove that `WHATSAPP_ACCESS_TOKEN` can control the selected number. Calling needs `whatsapp_business_messaging` for that business number; being able to read/change settings with `whatsapp_business_management` is insufficient on its own. [Calling prerequisites](https://developers.facebook.com/documentation/business-messaging/whatsapp/calling/)
+
+Inspect the exact token saved in Render privately in [Meta's Access Token Debugger](https://developers.facebook.com/tools/debug/accesstoken/). Verify the issuing application is Community Connect, the token is valid/unexpired, the messaging scope is granted, and relevant asset targets match the intended account. Do not share the token, a screenshot containing it, or raw provider payloads. If needed, generate a fresh temporary token through Community Connect's API Setup for the intended test number and Messaging account, grant messaging and management access where offered, replace only Render's `WHATSAPP_ACCESS_TOKEN`, and save/redeploy. The agent token, App secret and verification token serve different purposes and do not need changing for this correction attempt.
+
+For a system-user token, also verify app assignment and access to both the WhatsApp account and linked Messaging account; employee assignments do not automatically cascade. Correct scope names alone do not establish access to a particular number. [Access-token and asset requirements](https://developers.facebook.com/documentation/business-messaging/whatsapp/access-tokens)
+
+The local diagnostic fixes preserve only an allowlisted error code, action, HTTP status and integer Meta code/subcode in errors, snapshots and logs. They do not log Meta message text, details, trace IDs, call IDs, SDP, credentials or notes. A later `CALL_API_AUTH` suggests token authentication; a network/timeout/session rejection remains distinct. After correcting access and deploying, reconnect the desk and use one fresh synthetic inbound call. A successful test must confirm both directions of audio and hang-up; an ended webhook alone does not establish a connected conversation.
 
 ## Meta Model API: verified contract
 
@@ -250,7 +266,7 @@ Official references: [overview](https://dev.meta.ai/docs/overview), [authenticat
 
 ## Inbound Calling account requirements and verification still needed
 
-Scope: a test person calls from WhatsApp, a human agent answers and speaks with them, then enters **manual agent notes** in the existing summary workflow. Keep the support scenario fictional and the notes synthetic. The gateway and browser answering interface are implemented locally; deployment and real-call/media verification remain outstanding. Recording, transcription, automated voice responses and outbound calling are outside this milestone.
+Scope: a test person calls from WhatsApp, a human agent answers and speaks with them, then enters **manual agent notes** in the existing summary workflow. Keep the support scenario fictional and the notes synthetic. The gateway and browser answering interface are deployed; real-call/media verification remains outstanding. Recording, transcription, automated voice responses and outbound calling are outside this milestone.
 
 ### Verified test routes and account requirements
 
@@ -280,12 +296,12 @@ Use WhatsApp on an iPhone or Android phone for the test caller. The agent needs 
 
 Keep the summary application on localhost. Expose only a dedicated signed webhook/Calling gateway through the selected HTTPS domain or tunnel, with controlled agent access. Do not publish the current model-key-backed local summary server wholesale. SIP remains a supported alternative if appropriate PBX/softphone infrastructure already exists. [Integration examples](https://developers.facebook.com/documentation/business-messaging/whatsapp/calling/integration-examples)
 
-**Remaining work:** review/publish the local Calling implementation and migrate the existing Render service to a single always-on instance. Confirm SIP/shared-number routing and Calling eligibility beyond accepted settings, then verify real inbound-call delivery, Meta SDP acceptance and two-way audio. Restrictive-network TURN support is not implemented, and visual QA remains unverified. App publication, receiver deployment, webhook verification, app-field subscriptions and the reported Calling settings are completed in the user-verified checkpoint above. This implementation did not change other apps' callbacks or subscriptions.
+**Remaining work:** use a single always-on Render instance for the real call test. Confirm SIP/shared-number routing and Calling eligibility beyond accepted settings, then verify browser microphone operation, real inbound-call delivery, Meta SDP acceptance and two-way audio. Restrictive-network TURN support is not implemented, and visual QA remains unverified. App publication, webhook verification, app-field subscriptions, the reported Calling settings and gateway startup/page delivery are completed in the checkpoints above. The local startup-diagnostic changes are not yet committed or deployed. This implementation did not change other apps' callbacks or subscriptions.
 
 ## Small implementation plan
 
 1. **Milestone 1: notes to reviewed case — implemented.** Run the local backend and browser interface using the commands above. Synthetic notes produce an editable draft through the real API or an explicitly selected, labelled simulation. Export requires current human review. Browser visual/download checks remain the verification limit documented above.
-2. **Human-answered inbound Calling — implemented locally; live verification pending.** Deploy the separate gateway, confirm the intended number's routing, and verify two-way audio using a fictional support scenario. Keep manual agent notes as the summary source.
+2. **Human-answered inbound Calling — deployed; live-call verification pending.** Confirm the intended number's routing and browser microphone operation, then verify two-way audio using a fictional support scenario on an always-on instance. Keep manual agent notes as the summary source.
 3. **Connect the verified flow.** The desk currently supports deliberate manual transfer of synthetic notes into the local summary app. Automatic call-context transfer remains future work. Preserve source and review status; gate subsequent actions on human approval. Recording, transcription and automated voice remain outside this plan.
 
 Milestone 1 is complete when synthetic notes produce a source-grounded draft, the agent can edit it, saving is blocked until explicit review, and errors leave the source notes and agent edits intact. Verify key isolation, synthetic labels, output parsing and the review gate. This milestone does not require a working Calling account.

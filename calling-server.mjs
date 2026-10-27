@@ -5,7 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseEnv } from 'node:util';
 import { WebhookError, verifyChallenge, verifySignature, summarizeWebhook } from './lib/whatsapp-webhook.mjs';
-import { CallingError, callingEnvironment, readCallingConfig, parseCallingEvents, createCallingClient, validateSdp } from './lib/calling-api.mjs';
+import { CallingError, callingEnvironment, readCallingConfig, parseCallingEvents, createCallingClient, validateSdp, safeCallingDiagnostic, safeCallFailureCode } from './lib/calling-api.mjs';
 import { CallStateError, createCallBroker } from './lib/calling-state.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
@@ -51,7 +51,7 @@ async function readJson(request, limit = 131072) {
 export function createCallingServer(config, { sendAction = createCallingClient(config), onSummary = () => {}, onDiagnostic = () => {}, broker: suppliedBroker } = {}) {
   const broker = suppliedBroker || createCallBroker({ sendAction: async (...args) => {
     try { return await sendAction(...args); } catch (error) {
-      try { onDiagnostic({ event: 'calling_action_failed', code: error instanceof CallingError ? error.code : 'CALL_ACTION_UNCONFIRMED' }); } catch { /* Fixed diagnostics only. */ }
+      try { onDiagnostic({ event: 'calling_action_failed', code: safeCallFailureCode(error?.code), ...safeCallingDiagnostic({ ...safeCallingDiagnostic(error?.diagnostic), action: args[0] }) }); } catch { /* Fixed diagnostics only. */ }
       throw error;
     }
   } });
@@ -141,7 +141,8 @@ export function createCallingServer(config, { sendAction = createCallingClient(c
       reply(response, 200, broker.getState(agentId));
     } catch (error) {
       const safe = error instanceof CallingError || error instanceof CallStateError || error instanceof WebhookError ? error : new CallingError('INTERNAL_ERROR', 'The request could not be completed.', 500);
-      if (!response.headersSent && !response.destroyed) reply(response, safe.status, { error: { code: safe.code, message: safe.message } });
+      const diagnostic = safeCallingDiagnostic(safe.diagnostic);
+      if (!response.headersSent && !response.destroyed) reply(response, safe.status, { error: { code: safe.code, message: safe.message, ...(Object.keys(diagnostic).length ? { diagnostic } : {}) } });
       else if (!response.destroyed) response.end();
     }
   });

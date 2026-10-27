@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { createCallingServer } from '../calling-server.mjs';
+import { CallingError } from '../lib/calling-api.mjs';
 
 const config = {
   port: 10000, publicOrigin: 'http://127.0.0.1:10000', graphVersion: 'v26.0', phoneNumberId: '123456789',
@@ -146,6 +147,31 @@ test('provider failures expose only generic state and fixed diagnostics, never p
   assert.equal(response.status, 502);
   const body = await response.text();
   assert.ok(!body.includes(config.accessToken));
-  assert.deepEqual(diagnostics, [{ event: 'calling_action_failed', code: 'CALL_ACTION_UNCONFIRMED' }]);
+  assert.deepEqual(diagnostics, [{ event: 'calling_action_failed', code: 'CALL_ACTION_UNCONFIRMED', action: 'pre_accept' }]);
   assert.equal((await (await api('state')).json()).call.state, 'uncertain');
+});
+
+test('permission codes survive HTTP and polling without exposing provider text; terminate clears stale failure', async t => {
+  const { api, webhook, diagnostics } = await start(t, { sendAction: async () => {
+    throw new CallingError('CALL_API_PERMISSION', config.accessToken, 502, { action: 'pre_accept', httpStatus: 403, metaCode: 200, metaSubcode: 123, token: config.accessToken });
+  } });
+  await api('ready', { ready: true });
+  await webhook(payload());
+  const id = (await (await api('state')).json()).call.id;
+  const response = await api(`calls/${id}/answer`, { sdp });
+  assert.equal(response.status, 502);
+  const data = await response.json();
+  assert.equal(data.error.code, 'CALL_API_PERMISSION');
+  assert.deepEqual(data.error.diagnostic, { action: 'pre_accept', httpStatus: 403, metaCode: 200, metaSubcode: 123 });
+  assert.ok(!JSON.stringify(data).includes(config.accessToken));
+  const pending = await (await api('state')).json();
+  assert.equal(pending.call.state, 'uncertain');
+  assert.equal(pending.call.errorCode, 'CALL_API_PERMISSION');
+  assert.deepEqual(pending.call.diagnostic, data.error.diagnostic);
+  assert.deepEqual(diagnostics, [{ event: 'calling_action_failed', code: 'CALL_API_PERMISSION', action: 'pre_accept', httpStatus: 403, metaCode: 200, metaSubcode: 123 }]);
+  await webhook(payload('terminate'));
+  const ended = (await (await api('state')).json()).call;
+  assert.equal(ended.state, 'ended');
+  assert.equal(ended.errorCode, undefined);
+  assert.equal(ended.diagnostic, undefined);
 });

@@ -244,6 +244,137 @@ test('unknown provider outcome is sanitized, never automatically retried, and al
   assert.equal(broker.getState('agent-one').call.state, 'ended');
 });
 
+test('allowlisted API failures retain fixed codes, messages and safe numeric diagnostics through the broker', async t => {
+  for (const code of ['CALL_API_AUTH', 'CALL_API_PERMISSION', 'CALL_API_SDP', 'CALL_API_REJECTED', 'CALL_API_TIMEOUT', 'CALL_API_NETWORK', 'CALL_ACTION_UNCONFIRMED']) {
+    await t.test(code, async () => {
+      const raw = Object.assign(new Error('secret-provider-message-sentinel'), {
+        code, status: 401, cause: { token: 'secret-cause-sentinel' },
+        diagnostic: { action: 'terminate', httpStatus: 403, metaCode: 10, metaSubcode: 0, message: 'secret-diagnostic-sentinel', token: 'secret-token-sentinel' },
+      });
+      const { broker } = setup({ sendAction: async () => { throw raw; } });
+      const id = readyCall(broker);
+      let caught;
+      await assert.rejects(broker.answer('agent-one', id, ANSWER), error => {
+        caught = error;
+        return error instanceof CallStateError && error.code === code && error.status === 502;
+      });
+      assert.ok(!caught.message.includes('sentinel'));
+      assert.equal(caught.cause, undefined);
+      assert.deepEqual(caught.diagnostic, { action: 'pre_accept', httpStatus: 403, metaCode: 10, metaSubcode: 0 });
+      const call = broker.getState('agent-one').call;
+      assert.equal(call.state, 'uncertain');
+      assert.equal(call.errorCode, code);
+      assert.equal(call.error, caught.message);
+      assert.deepEqual(call.diagnostic, caught.diagnostic);
+      assert.ok(!JSON.stringify(call).includes('sentinel'));
+    });
+  }
+});
+
+test('diagnostics never coerce strings or copy inherited properties, accessors or out-of-range values', async () => {
+  let getterCalled = false;
+  const diagnostic = Object.create({ metaCode: 200, httpStatus: 403 });
+  Object.defineProperty(diagnostic, 'action', { get() { getterCalled = true; return 'accept'; } });
+  Object.defineProperty(diagnostic, 'metaSubcode', { get() { getterCalled = true; return 123; } });
+  const raw = Object.assign(new Error('raw-provider-sentinel'), { code: 'CALL_API_PERMISSION', diagnostic });
+  const { broker } = setup({ sendAction: async () => { throw raw; } });
+  const id = readyCall(broker);
+  await assert.rejects(broker.answer('agent-one', id, ANSWER), error => {
+    assert.deepEqual(error.diagnostic, { action: 'pre_accept' });
+    return errorCode('CALL_API_PERMISSION')(error);
+  });
+  assert.equal(getterCalled, false);
+  for (const invalid of [
+    { httpStatus: '403', metaCode: '10', metaSubcode: '0' },
+    { httpStatus: 99, metaCode: -1, metaSubcode: 1000000000 },
+    { httpStatus: 600, metaCode: NaN, metaSubcode: Infinity },
+    { httpStatus: 403.5, metaCode: 10.5, metaSubcode: 0.5 },
+  ]) {
+    assert.equal(new CallStateError('CALL_API_PERMISSION', invalid).diagnostic, undefined);
+  }
+  assert.deepEqual(new CallStateError('CALL_API_PERMISSION', { action: 'accept', httpStatus: 599, metaCode: 999999999, metaSubcode: 0 }).diagnostic,
+    { action: 'accept', httpStatus: 599, metaCode: 999999999, metaSubcode: 0 });
+});
+
+test('unknown provider codes and hostile code accessors fall back to a fixed unconfirmed failure', async () => {
+  for (const raw of [
+    Object.assign(new Error('raw-sentinel'), { code: 'AGENT_BUSY', status: 418 }),
+    Object.defineProperty(new Error('raw-sentinel'), 'code', { get() { throw new Error('getter-sentinel'); } }),
+  ]) {
+    const { broker } = setup({ sendAction: async () => { throw raw; } });
+    const id = readyCall(broker);
+    await assert.rejects(broker.answer('agent-one', id, ANSWER), error => {
+      assert.deepEqual(error.diagnostic, { action: 'pre_accept' });
+      return errorCode('CALL_ACTION_UNCONFIRMED')(error) && !error.message.includes('sentinel');
+    });
+  }
+  assert.equal(new CallStateError('constructor').code, 'CALL_ACTION_UNCONFIRMED');
+  assert.equal(new CallStateError('__proto__').code, 'CALL_ACTION_UNCONFIRMED');
+});
+
+test('the original permission cause survives polling and generic cleanup failure until confirmed termination', async () => {
+  const diagnostic = { action: 'pre_accept', httpStatus: 403, metaCode: 10, metaSubcode: 123 };
+  const actions = [];
+  const { broker } = setup({ sendAction: async action => {
+    actions.push(action);
+    if (action === 'pre_accept') throw Object.assign(new Error('provider-secret-sentinel'), { code: 'CALL_API_PERMISSION', diagnostic });
+    throw new Error('cleanup-secret-sentinel');
+  } });
+  const id = readyCall(broker);
+  await assert.rejects(broker.answer('agent-one', id, ANSWER), errorCode('CALL_API_PERMISSION'));
+  const before = broker.getState('agent-one').call;
+  diagnostic.metaCode = 999;
+  before.diagnostic.metaCode = 555;
+  assert.equal(broker.getState('agent-one').call.diagnostic.metaCode, 10);
+  await assert.rejects(broker.hangup('agent-one', id), error => {
+    assert.deepEqual(error.diagnostic, { action: 'terminate' });
+    return errorCode('CALL_ACTION_UNCONFIRMED')(error);
+  });
+  const after = broker.getState('agent-one').call;
+  assert.equal(after.state, 'uncertain');
+  assert.equal(after.errorCode, 'CALL_API_PERMISSION');
+  assert.deepEqual(after.diagnostic, { action: 'pre_accept', httpStatus: 403, metaCode: 10, metaSubcode: 123 });
+  assert.deepEqual(actions, ['pre_accept', 'terminate']);
+  broker.ingest([terminate()]);
+  assert.deepEqual(broker.getState('agent-one').call, { id, state: 'ended' });
+});
+
+test('a meaningful cleanup failure replaces an earlier unconfirmed cause without retrying Answer', async () => {
+  const actions = [];
+  const { broker } = setup({ sendAction: async action => {
+    actions.push(action);
+    if (action === 'pre_accept') throw new Error('raw-sentinel');
+    throw Object.assign(new Error('raw-sentinel'), { code: 'CALL_API_AUTH', diagnostic: { httpStatus: 401, metaCode: 190 } });
+  } });
+  const id = readyCall(broker);
+  await assert.rejects(broker.answer('agent-one', id, ANSWER), errorCode('CALL_ACTION_UNCONFIRMED'));
+  await assert.rejects(broker.hangup('agent-one', id), errorCode('CALL_API_AUTH'));
+  assert.equal(broker.getState('agent-one').call.errorCode, 'CALL_API_AUTH');
+  assert.deepEqual(broker.getState('agent-one').call.diagnostic, { action: 'terminate', httpStatus: 401, metaCode: 190 });
+  assert.deepEqual(actions, ['pre_accept', 'terminate']);
+});
+
+test('accept and reject failures report their actual action while preserving uncertain-state guards', async t => {
+  for (const action of ['accept', 'reject']) {
+    await t.test(action, async () => {
+      const { broker } = setup({ sendAction: async currentAction => {
+        if (currentAction === action) throw Object.assign(new Error('raw-sentinel'), {
+          code: 'CALL_API_REJECTED', diagnostic: { action: 'pre_accept', httpStatus: 400, metaCode: 100 },
+        });
+      } });
+      const id = readyCall(broker);
+      if (action === 'accept') await broker.answer('agent-one', id, ANSWER);
+      await assert.rejects(broker[action]('agent-one', id), error => {
+        assert.deepEqual(error.diagnostic, { action, httpStatus: 400, metaCode: 100 });
+        return errorCode('CALL_API_REJECTED')(error);
+      });
+      assert.equal(broker.getState('agent-one').call.state, 'uncertain');
+      assert.equal(broker.getState('agent-one').call.errorCode, 'CALL_API_REJECTED');
+      assert.throws(() => broker.answer('agent-one', id, ANSWER), errorCode('CALL_STATE_CONFLICT'));
+    });
+  }
+});
+
 test('a failed technical cleanup is visible as uncertain, never repeatedly retried by sweep', async () => {
   const actions = [];
   const { broker, advance } = setup({ sendAction: async action => { actions.push(action); throw new Error('sensitive-provider-data'); } });
