@@ -19,8 +19,13 @@ All demo data must be synthetic. The source notes remain visible beside the four
 
 ## Workspace and Git
 
-- Project root: `C:\Projects\community-connect-lab\Community Connect`.
-- Parent directory: `C:\Projects\community-connect-lab`.
+Clone the repository and change into its directory:
+
+```sh
+git clone https://github.com/community-connect-lab/community-connect.git
+cd community-connect
+```
+
 - Git branch: `main`.
 - GitHub remote: `https://github.com/community-connect-lab/community-connect.git`.
 
@@ -28,17 +33,15 @@ The notes application runs locally. The separate Render service now runs the Cal
 
 ## Interface theme
 
-The interface combines [BasilMinTyme](https://www.basilmintyme.com/) green (`#2f8a56`) and [Women Build Apps](https://www.womenbuildapps.com/) purple (`#9b6dff`) with light backgrounds and white panels. Darker green and purple variants keep small text and button labels readable. Source notes use green accents; drafting and review use purple accents, while warnings and errors retain separate semantic colours.
+The interface uses green and purple accents (`#2f8a56` and `#9b6dff`) with light backgrounds and white panels. Darker green and purple variants keep small text and button labels readable. Source notes use green accents; drafting and review use purple accents, while warnings and errors retain separate semantic colours.
 
 The header and browser icon use `assets/meta-app-icon.svg`. The matching 1024 × 1024 PNG at `assets/meta-app-icon-1024.png` is suitable for Meta's app-icon upload. The notes server exposes the SVG only through its explicit `/brand-icon.svg` asset route.
 
 ## Windows setup and start
 
-Requires **Node.js 22.19 or newer**. There are no runtime or development package dependencies and no build step. In PowerShell:
+Requires **Node.js 22.19 or newer**. There are no runtime or development package dependencies and no build step. From the cloned repository directory, use PowerShell:
 
 ```powershell
-Set-Location -LiteralPath 'C:\Projects\community-connect-lab\Community Connect'
-
 # Create once; preserve an existing local key.
 if (-not (Test-Path -LiteralPath .env)) {
     Copy-Item -LiteralPath .env.example -Destination .env
