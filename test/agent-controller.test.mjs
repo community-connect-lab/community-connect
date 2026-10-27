@@ -31,6 +31,7 @@ function fixture(t, options = {}) {
     close() { this.closed = true; this.connectionState = 'closed'; this.emit('connectionstatechange'); }
   }
   const desk = createAgentController({
+    ...options.hooks,
     clientId: 'synthetic-tab-id', secureContext: true, PeerConnection: Peer,
     setTimer: fn => { const id = ++timerId; timers.set(id, fn); return id; }, clearTimer: id => timers.delete(id),
     mediaDevices: { async getUserMedia(constraints) { micRequests++; assert.deepEqual(constraints, { audio: true, video: false }); return options.getUserMedia ? options.getUserMedia() : stream; } },
@@ -346,4 +347,48 @@ test('a call with completed browser audio attachment retains the notes prompt wh
   assert.doesNotMatch(f.desk.snapshot().message, /before audio connected/);
   f.data = { ready: true, busy: false, call: { id: 'synthetic-next-call', state: 'ringing' } }; await f.desk.poll();
   assert.equal(f.desk.snapshot().callConnected, false);
+});
+
+test('a case guard can stop Answer before any offer or call action is requested', async t => {
+  const f = fixture(t, { hooks: { onBeforeAnswer: () => false } }); await f.ready(); await f.ring();
+  const count = f.requests.length; await f.desk.answer();
+  assert.equal(f.requests.length, count); assert.equal(f.Peer.instances.length, 0); assert.equal(f.desk.snapshot().command, '');
+});
+
+test('capture hooks begin only after accepted audio attachment and finalize once on actual call end', async t => {
+  const replacement = deferred(), hooks = [];
+  const f = fixture(t, { replaceTrack: () => replacement.promise, hooks: {
+    onAcceptedAudio: detail => hooks.push({ name: 'accepted', detail }), onAudioClosed: detail => hooks.push({ name: 'closed', detail }), onCallEnded: detail => hooks.push({ name: 'ended', detail }),
+  } });
+  await f.ready(); await f.ring(); const answering = f.desk.answer(); await until(() => f.events.includes('attach-microphone'));
+  assert.equal(hooks.length, 0); replacement.resolve(); await answering;
+  assert.equal(hooks[0].name, 'accepted'); assert.equal(hooks[0].detail.callId, callId); assert.equal(hooks[0].detail.microphoneStream, f.stream);
+  f.data = { ready: true, busy: false, call: { id: callId, state: 'ended' } }; await f.desk.poll(); await f.desk.poll();
+  assert.deepEqual(hooks.map(item => item.name), ['accepted', 'closed', 'ended']);
+});
+
+test('case requests reuse private authentication for WAV and binary exports without accepting header overrides', async t => {
+  const f = fixture(t); await f.desk.connect(secret);
+  f.handler = url => {
+    if (url.endsWith('/case/transcribe')) return response({ transcript: 'Synthetic transcript.' });
+    if (url.endsWith('/case/export')) return new Response('synthetic-pdf-bytes', { headers: { 'Content-Type': 'application/pdf' } });
+  };
+  const audio = new Blob([new Uint8Array(60)], { type: 'audio/wav' });
+  await f.desk.requestCase('/case/transcribe', { method: 'POST', rawBody: audio, contentType: 'audio/wav', headers: { Authorization: 'must-not-override', 'X-Call-ID': callId, 'X-Participants-Agreed': 'true' } });
+  const upload = f.requests.find(item => item.url.endsWith('/case/transcribe')); assert.equal(upload.body, audio); assert.equal(upload.headers['Content-Type'], 'audio/wav'); assert.equal(upload.headers.Authorization, `Bearer ${secret}`); assert.equal(upload.headers['X-Call-ID'], callId);
+  const blob = await f.desk.requestCase('/case/export', { method: 'POST', body: {}, responseType: 'blob' }); assert.ok(blob instanceof Blob); assert.equal(await blob.text(), 'synthetic-pdf-bytes');
+  await assert.rejects(f.desk.requestCase('/unapproved-route'), /Unsupported/);
+});
+
+test('a long case request does not block call state polling; call-proof403 is not an agent logout', async t => {
+  const drafting = deferred(); const f = fixture(t); await f.ready(); let reached = false;
+  f.handler = url => {
+    if (url.endsWith('/case/draft')) { reached = true; return drafting.promise; }
+    if (url.endsWith('/case/transcribe')) return response({ error: { code: 'TRANSCRIPTION_CALL_REQUIRED', message: 'private-provider-sentinel' } }, 403);
+  };
+  const pending = f.desk.requestCase('/case/draft', { method: 'POST', body: { notes: 'Synthetic.' } }); await until(() => reached);
+  f.data = { ready: true, busy: false, call: { id: callId, state: 'ringing' } }; await f.desk.poll(); assert.equal(f.desk.snapshot().call.state, 'ringing');
+  drafting.resolve(response({ complete: true })); await pending;
+  await assert.rejects(f.desk.requestCase('/case/transcribe', { method: 'POST', rawBody: new Blob(['synthetic']), contentType: 'audio/wav' }), error => error.kind === 'action' && error.publicCode === 'TRANSCRIPTION_CALL_REQUIRED' && !error.message.includes('sentinel'));
+  assert.equal(f.desk.snapshot().connected, true);
 });

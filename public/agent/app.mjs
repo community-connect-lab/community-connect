@@ -1,3 +1,5 @@
+import { mountCaseDesk, CASE_ERROR_MESSAGES } from './case-desk.mjs';
+
 const TERMINAL = new Set(['ended']);
 const LIVE = new Set(['ringing', 'connecting', 'active', 'ending', 'uncertain']);
 // Cleanup may fail (ending -> uncertain). Neither state can become answerable
@@ -28,8 +30,8 @@ class DeskError extends Error {
 
 function apiFailure(data, status) {
   const supplied = data?.error;
-  const code = typeof supplied?.code === 'string' && Object.hasOwn(API_ERROR_COPY, supplied.code) ? supplied.code : '';
-  const message = code ? API_ERROR_COPY[code] : status === 409 ? 'The call or agent state changed before the action completed.' : 'The gateway could not confirm this call action.';
+  const code = typeof supplied?.code === 'string' && (Object.hasOwn(API_ERROR_COPY, supplied.code) || Object.hasOwn(CASE_ERROR_MESSAGES, supplied.code)) ? supplied.code : '';
+  const message = code ? API_ERROR_COPY[code] ?? CASE_ERROR_MESSAGES[code] : status === 409 ? 'The call or agent state changed before the action completed.' : 'The gateway could not confirm this call action.';
   const details = code ? [code] : [];
   const diagnostic = supplied?.diagnostic;
   let stage = '';
@@ -55,10 +57,12 @@ export function createAgentController({
   setTimer = globalThis.setTimeout,
   clearTimer = globalThis.clearTimeout,
   secureContext = globalThis.isSecureContext,
+  onBeforeAnswer = () => {}, onAcceptedAudio = () => {}, onRemoteStream = () => {}, onAudioClosed = () => {}, onCallEnded = () => {},
 } = {}) {
   let token = '', epoch = 0, revision = 0, pollTimer, pollInFlight = false;
   let microphone = null, peer = null, sender = null, outgoingTrack = null, answerAbort = null;
   let answerTask = null, cleanupQueued = false, mediaRevision = 0;
+  let remoteStream = null, acceptedAudioCallId = null;
   let callFailureId = null, callFailureStage = '';
   const callPhases = new Map();
   const connectedCalls = new Set();
@@ -90,11 +94,13 @@ export function createAgentController({
 
   function closePeer() {
     mediaRevision++;
+    const closingCallId = acceptedAudioCallId; acceptedAudioCallId = null;
+    if (closingCallId) { try { Promise.resolve(onAudioClosed({ callId: closingCallId })).catch(() => {}); } catch {} }
     answerAbort?.abort(); answerAbort = null;
     if (peer) { peer.ontrack = null; peer.onconnectionstatechange = null; peer.close(); }
     peer = null; sender = null;
     outgoingTrack?.stop(); outgoingTrack = null;
-    view.setRemoteStream(null); state.audioBlocked = false;
+    remoteStream = null; view.setRemoteStream(null); state.audioBlocked = false;
   }
   function stopMedia() { closePeer(); stopTracks(microphone); microphone = null; state.ready = false; }
   function disconnect(message = 'Desk disconnected. Microphone off.') {
@@ -103,18 +109,22 @@ export function createAgentController({
     stopMedia(); state = { ...state, connected: false, ready: false, busy: false, call: null, callConnected: false, command: '', error: '', message };
     view.clearToken(); render();
   }
-  async function api(path, { method = 'GET', body, timeout = 25000 } = {}) {
+  async function api(path, { method = 'GET', body, rawBody, contentType, headers = {}, responseType = 'json', timeout = 25000 } = {}) {
     if (!token) throw new DeskError('auth', 'Connect your desk again.');
     const controller = new AbortController(); pending.add(controller);
     const timeoutId = setTimer(() => controller.abort(), timeout);
     try {
+      const extraHeaders = {};
+      for (const [name, value] of Object.entries(headers)) if (['x-call-id', 'x-participants-agreed'].includes(name.toLowerCase()) && typeof value === 'string' && !/[\r\n]/.test(value)) extraHeaders[name] = value;
       const response = await fetchImpl(`/agent/api${path}`, {
-        method, headers: { Authorization: `Bearer ${token}`, 'X-Agent-ID': clientId, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: controller.signal, cache: 'no-store', credentials: 'omit', redirect: 'error',
+        method, headers: { Authorization: `Bearer ${token}`, 'X-Agent-ID': clientId, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...(rawBody === undefined ? {} : { 'Content-Type': contentType === 'audio/wav' ? 'audio/wav' : 'application/octet-stream' }), ...extraHeaders },
+        ...(rawBody !== undefined ? { body: rawBody } : body === undefined ? {} : { body: JSON.stringify(body) }), signal: controller.signal, cache: 'no-store', credentials: 'omit', redirect: 'error',
       });
-      if (response.status === 401 || response.status === 403) throw new DeskError('auth', 'Access was not accepted. Check the agent token and reconnect.');
+      if (response.status === 401) throw new DeskError('auth', 'Access was not accepted. Check the agent token and reconnect.');
+      if (response.ok && responseType === 'blob') return await response.blob();
       let data;
       try { data = await response.json(); } catch { throw new DeskError('network', 'The gateway returned an unreadable response.'); }
+      if (response.status === 403 && ['AGENT_UNAUTHORIZED', 'ORIGIN_NOT_ALLOWED'].includes(data?.error?.code)) throw new DeskError('auth', 'Access was not accepted. Check the agent token and gateway address, then reconnect.');
       if (!response.ok) throw apiFailure(data, response.status);
       return data;
     } catch (error) {
@@ -150,6 +160,10 @@ export function createAgentController({
     else if (changedCall && state.call?.state === 'ringing') state.message = 'An incoming WhatsApp test call is waiting. Choose Answer or Reject.';
     else if (changedCall && !state.call) state.message = state.ready ? 'Ready for an incoming WhatsApp test call. Keep this tab open.' : 'Not receiving calls. Microphone off.';
     render();
+    if ((ended && previous?.id === state.call.id && previous.state !== 'ended') || (changedCall && previous && !TERMINAL.has(previous.state))) {
+      const endedId = ended && previous?.id === state.call.id ? state.call.id : previous.id;
+      try { Promise.resolve(onCallEnded({ callId: endedId })).catch(() => {}); } catch {}
+    }
   }
   function schedulePoll() {
     clearTimer(pollTimer);
@@ -225,6 +239,7 @@ export function createAgentController({
   }
   async function runAnswer() {
     if (!state.connected || !state.ready || !microphone || state.command || state.call?.state !== 'ringing') return;
+    try { if (onBeforeAnswer() === false) return; } catch { state.error = 'Prepare or save the current case before answering this call.'; render(); return; }
     const id = state.call.id, currentEpoch = epoch;
     revision++; callFailureId = null; callFailureStage = ''; state.command = 'answer'; state.error = ''; state.message = 'Preparing the audio connection…'; render();
     const operation = new AbortController(); answerAbort = operation;
@@ -238,7 +253,9 @@ export function createAgentController({
       connection.ontrack = event => {
         if (!current()) return;
         const stream = event.streams?.[0] ?? (globalThis.MediaStream ? new MediaStream([event.track]) : null);
-        view.setRemoteStream(stream); void playAudio();
+        remoteStream = stream; view.setRemoteStream(stream);
+        try { onRemoteStream(stream); } catch {}
+        void playAudio();
       };
       await connection.setRemoteDescription({ type: 'offer', sdp: offer.sdp });
       if (!current()) return;
@@ -274,6 +291,8 @@ export function createAgentController({
       await sender.replaceTrack(outgoingTrack);
       if (!current()) { outgoingTrack?.stop(); return; }
       connectedCalls.add(id); state.callConnected = true;
+      acceptedAudioCallId = id;
+      try { Promise.resolve(onAcceptedAudio({ callId: id, microphoneStream: microphone, remoteStream })).catch(() => {}); } catch {}
       state.error = ''; state.message = 'Call connected. Listen and write your own fictional notes.';
       connection.onconnectionstatechange = () => {
         if (peer !== connection || !state.connected) return;
@@ -326,7 +345,8 @@ export function createAgentController({
     if (currentMedia === mediaRevision) render();
   }
   render();
-  return { connect, setReady, answer, reject: () => callAction('reject'), hangup: () => callAction('hangup'), disconnect, poll, playAudio, snapshot };
+  const requestCase = (path, options) => { if (!/^\/case\/(config|draft|transcribe|export)$/.test(path)) return Promise.reject(new DeskError('action', 'Unsupported case request.')); return api(path, options); };
+  return { connect, setReady, answer, reject: () => callAction('reject'), hangup: () => callAction('hangup'), disconnect, poll, playAudio, snapshot, requestCase };
 }
 
 export function mountAgentDesk(document, window = globalThis) {
@@ -341,7 +361,12 @@ export function mountAgentDesk(document, window = globalThis) {
     uncertain: ['CALL NEEDS ATTENTION', 'Check this connection.', 'Use Hang up to clean up the call before starting another.'],
   };
   const text = (id, value) => { if (element(id).textContent !== value) element(id).textContent = value; };
-  const controller = createAgentController({ view: {
+  let caseDesk = null;
+  const controller = createAgentController({
+    onBeforeAnswer: () => caseDesk?.beforeAnswer(),
+    onAcceptedAudio: detail => caseDesk?.onAcceptedCall(detail), onRemoteStream: stream => caseDesk?.onRemoteStream(stream),
+    onAudioClosed: detail => caseDesk?.onAudioClosed(detail), onCallEnded: detail => caseDesk?.onCallEnded(detail),
+    view: {
     clearToken() { element('agent-token').value = ''; },
     setRemoteStream(stream) { audio.srcObject = stream; },
     async playAudio() { if (audio.srcObject) await audio.play(); },
@@ -374,7 +399,8 @@ export function mountAgentDesk(document, window = globalThis) {
       text('hangup-button', state.command === 'hangup' ? 'Ending…' : 'Hang up');
       element('play-audio-button').hidden = !state.audioBlocked;
       text('activity-status', state.message); text('error-message', state.error); element('error-message').hidden = !state.error;
-      text('microphone-status', state.microphoneActive ? 'Microphone ready · no recording' : 'Microphone off');
+      text('microphone-status', state.microphoneActive ? 'Microphone ready' : 'Microphone off');
+      caseDesk?.setConnectionState(state);
     },
   } });
   element('connect-form').addEventListener('submit', event => { event.preventDefault(); void controller.connect(element('agent-token').value); });
@@ -384,7 +410,8 @@ export function mountAgentDesk(document, window = globalThis) {
   element('hangup-button').addEventListener('click', () => { void controller.hangup(); });
   element('disconnect-button').addEventListener('click', () => controller.disconnect());
   element('play-audio-button').addEventListener('click', () => { void controller.playAudio(); });
-  element('agent-notes').addEventListener('input', () => text('notes-count', `${element('agent-notes').value.length.toLocaleString()} / 12,000`));
+  caseDesk = mountCaseDesk(document, { request: controller.requestCase, window });
+  caseDesk.setConnectionState(controller.snapshot());
   window.addEventListener('beforeunload', event => { if (LIVE.has(controller.snapshot().call?.state)) { event.preventDefault(); event.returnValue = ''; } });
   window.addEventListener('pagehide', () => controller.disconnect());
   return controller;

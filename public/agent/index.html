@@ -17,7 +17,7 @@
   <main>
     <section class="intro" aria-labelledby="page-title">
       <div><p class="eyebrow">WHATSAPP / HUMAN-ANSWERED CALLS</p><h1 id="page-title">A conversation.<br><span>A person to help.</span></h1><p class="intro-copy">Answer an incoming test call, listen, and write your own notes. You decide when a conversation begins and ends.</p></div>
-      <aside class="boundary-card"><strong>Use a fictional support scenario.</strong><p>Audio is live. This desk does not record, transcribe, generate a voice response or place outbound calls.</p></aside>
+      <aside class="boundary-card"><strong>A person leads every conversation.</strong><p>Use fictional details. Optional, agreed call capture can create a transcript after the call. You review every case before exporting.</p></aside>
     </section>
     <div class="workspace">
       <section class="panel call-panel" aria-labelledby="desk-heading">
@@ -31,6 +31,13 @@
         <div id="connected-controls" hidden>
           <div class="readiness"><div><strong id="readiness-title">Get ready to listen.</strong><p id="readiness-help">Put on a headset, then allow microphone access when you choose Ready.</p></div><button class="button button-green" id="ready-button" type="button">Ready to receive</button></div>
         </div>
+        <fieldset class="capture-controls">
+          <legend>Optional call transcript</legend>
+          <label class="check-row"><input id="capture-agreement" type="checkbox" disabled><span>Capture this call for transcription. All participants have agreed to temporary audio capture and sending it to Meta.</span></label>
+          <p>Choose before Answer. Capture starts only after acceptance, for up to five minutes. When the call ends, captured audio is automatically sent to Meta for transcription. Stop keeps the captured segment; Discard removes it before upload.</p>
+          <p id="capture-status" class="capture-status" role="status">Optional capture is off</p>
+          <div class="capture-actions"><button class="button button-outline" id="stop-capture" type="button" hidden>Stop capture</button><button class="text-button" id="discard-audio" type="button" hidden>Discard captured audio</button></div>
+        </fieldset>
         <div class="call-stage" id="call-stage" data-state="idle" aria-labelledby="call-title">
           <span class="call-symbol" aria-hidden="true">☎</span><p id="call-kicker" class="eyebrow">YOUR NEXT CONVERSATION</p><h3 id="call-title">Connect your desk to begin.</h3><p id="call-help">Only an incoming WhatsApp test call will appear here.</p>
           <div class="call-actions" id="call-actions" hidden><button class="button button-green" id="answer-button" type="button">Answer call</button><button class="button button-outline" id="reject-button" type="button">Reject</button><button class="button button-danger" id="hangup-button" type="button" hidden>Hang up</button></div>
@@ -41,16 +48,44 @@
         <div class="desk-footer"><span id="microphone-status">Microphone off</span><button class="text-button" id="disconnect-button" type="button" hidden>Disconnect desk</button></div>
         <audio id="remote-audio" autoplay></audio>
       </section>
-      <section class="panel notes-panel" aria-labelledby="notes-heading">
-        <div class="panel-heading"><div><p class="eyebrow">02 / YOUR NOTES</p><h2 id="notes-heading">Listen first. Write clearly.</h2></div><span class="small-badge">MANUAL NOTES</span></div>
-        <div class="scenario"><strong>A fictional community support enquiry</strong><p>For example, a caller asks to change a food-parcel collection time. Keep confirmed facts, open questions and proposed next steps distinct.</p></div>
-        <label for="agent-notes">Notes from your test conversation</label><textarea id="agent-notes" rows="13" maxlength="12000" spellcheck="true" aria-describedby="notes-help notes-count" placeholder="SYNTHETIC DEMO: What did the caller ask? What was confirmed? What still needs checking?"></textarea>
-        <div class="field-meta"><span id="notes-help">Synthetic details only. Notes stay in this tab.</span><span id="notes-count">0 / 12,000</span></div>
-        <div class="next-step"><p class="eyebrow">AFTER THE CONVERSATION</p><h3>From your notes to a reviewed case.</h3><p>Copy your notes into the local summary app. Review the draft before exporting it. Opening the app does not transfer these notes.</p><a class="button button-purple" href="http://localhost:3000" target="_blank" rel="noopener noreferrer">Open local summary app <span aria-hidden="true">↗</span></a><p class="fine-print">Start the notes app on your computer first. Reloading this page discards notes.</p></div>
-      </section>
+      <div class="case-workspace">
+        <div class="case-toolbar"><p>One fictional case at a time. Save your work before starting another.</p><div><button class="text-button" id="save-working-notes" type="button" disabled>Save working copy</button><button class="button button-outline" id="new-case" type="button">New case</button></div></div>
+        <div class="source-panels">
+          <section class="panel notes-panel" aria-labelledby="notes-heading">
+            <div class="panel-heading"><div><p class="eyebrow">02 / DURING THE CALL</p><h2 id="notes-heading">Agent notes</h2></div><span class="small-badge">MANUAL</span></div>
+            <p class="source-intro">Write what you hear. Keep confirmed facts, open questions and promises distinct.</p>
+            <label for="agent-notes">Your manual notes</label><textarea id="agent-notes" rows="13" maxlength="12000" spellcheck="true" aria-describedby="notes-help notes-count" placeholder="SYNTHETIC DEMO: What did the caller ask? What is confirmed? What needs checking?"></textarea>
+            <div class="field-meta"><span id="notes-help">Fictional details only. No automatic actions.</span><span id="notes-count">0 / 12,000</span></div>
+          </section>
+          <section class="panel transcript-panel" aria-labelledby="transcript-heading">
+            <div class="panel-heading"><div><p class="eyebrow">03 / AFTER THE CALL</p><h2 id="transcript-heading">Call transcript</h2></div><span class="small-badge">CHECK &amp; CORRECT</span></div>
+            <p id="transcription-info" class="source-intro">Connect the desk to check transcription availability.</p>
+            <label for="call-transcript">Editable speech-to-text</label><textarea id="call-transcript" rows="13" maxlength="36000" spellcheck="true" aria-describedby="transcript-origin transcript-count" placeholder="An agreed call capture can be transcribed here after the call. You can also paste a transcript you already have."></textarea>
+            <div class="field-meta"><span id="transcript-origin">No automatic transcript yet</span><span id="transcript-count">0 / 36,000</span></div>
+            <button class="text-button" id="retry-transcription" type="button" hidden>Retry captured-call transcription</button>
+            <details id="original-transcript-panel" hidden><summary>Original machine transcript</summary><pre id="original-transcript"></pre></details>
+          </section>
+        </div>
+        <div class="merge-toolbar"><div><strong>Your two sources, one reviewed case.</strong><p>Meta drafts a structured case and flags conflicts. Explicit human corrections take priority; uncertainty remains visible.</p><p id="case-model-status" class="fine-print">Connect your desk to create a Meta draft.</p></div><button class="button button-purple" id="merge-create" type="button" disabled>Create draft from notes</button></div>
+        <section class="panel case-panel" aria-labelledby="case-heading">
+          <div class="panel-heading"><div><p class="eyebrow">04 / MERGE, EDIT &amp; REVIEW</p><h2 id="case-heading">Case draft</h2></div><span class="small-badge">HUMAN DECISION</span></div>
+          <p id="case-provenance" class="case-provenance">An editable draft will appear here.</p>
+          <div class="case-empty" id="case-draft-empty"><h3>Keep the facts. Surface the gaps.</h3><p>Create a draft from your notes, a transcript, or both. Compare it with the sources and correct anything uncertain before review.</p></div>
+          <div id="case-draft-fields" class="case-draft-grid" hidden>
+            <div><label for="case-enquiry">Enquiry</label><textarea id="case-enquiry" rows="4" maxlength="6000" spellcheck="true"></textarea></div>
+            <div><label for="case-relevantDetails">Relevant details</label><textarea id="case-relevantDetails" rows="4" maxlength="6000" spellcheck="true"></textarea></div>
+            <div><label for="case-uncertainties">Missing, conflicting or uncertain information</label><textarea id="case-uncertainties" rows="4" maxlength="6000" spellcheck="true"></textarea></div>
+            <div><label for="case-nextSteps">Proposed next steps</label><textarea id="case-nextSteps" rows="4" maxlength="6000" spellcheck="true"></textarea></div>
+          </div>
+          <div class="case-review"><label class="check-row"><input id="case-reviewed" type="checkbox" disabled><span>I compared the draft with the available sources, checked the facts, clearly flagged unresolved conflicts and uncertainty, and reviewed the proposed next steps.</span></label><p id="case-review-help">Create a draft before reviewing it.</p></div>
+          <div class="case-export"><div><label for="export-format">Export format</label><select id="export-format"><option value="pdf">PDF</option><option value="docx">Word (.docx)</option><option value="txt">Text (.txt)</option><option value="pptx">PowerPoint (.pptx)</option></select></div><label class="check-row include-sources"><input id="include-sources" type="checkbox"><span>Include source notes and transcript</span></label><button class="button button-purple" id="export-reviewed" type="button" disabled>Export reviewed case</button></div>
+          <p class="fine-print">Only the reviewed case is exported by default. Source text is included only when selected. Notes and drafts stay in this tab; reloading discards unsaved work.</p>
+        </section>
+        <p class="activity" id="case-activity" role="status" aria-live="polite">Write manual notes during the call. Add an optional transcript after it ends.</p><p class="error-message" id="case-error" role="alert" hidden></p>
+      </div>
     </div>
   </main>
-  <footer><span>Community Connect</span><span>Live audio. Manual notes. Human judgement.</span></footer>
+  <footer><span>Community Connect</span><span>Manual notes. Optional agreed transcript. Human judgement.</span></footer>
   <noscript><p class="error-message">Enable JavaScript to use the call desk.</p></noscript>
 </body>
 </html>
