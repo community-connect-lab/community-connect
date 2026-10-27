@@ -58,8 +58,8 @@ async function readJson(request, limit = 131072) {
   return data;
 }
 
-export function createCallingServer(config, { sendAction = createCallingClient(config), onSummary = () => {}, onDiagnostic = () => {}, broker: suppliedBroker, modelConfig, transcriptionConfig, generate, transcribe, exportCase, caseNow } = {}) {
-  const cases = createCaseService({ modelConfig, transcriptionConfig, generate, transcribe, exportCase, now: caseNow });
+export function createCallingServer(config, { sendAction = createCallingClient(config), onSummary = () => {}, onDiagnostic = () => {}, broker: suppliedBroker, modelConfig, transcriptionConfig, generate, transcribe, exportCase, inspectAccess, caseNow } = {}) {
+  const cases = createCaseService({ modelConfig, transcriptionConfig, generate, transcribe, exportCase, inspectAccess, now: caseNow });
   const broker = suppliedBroker || createCallBroker({ sendAction: async (...args) => {
     try { return await sendAction(...args); } catch (error) {
       try { onDiagnostic({ event: 'calling_action_failed', code: safeCallFailureCode(error?.code), ...safeCallingDiagnostic({ ...safeCallingDiagnostic(error?.diagnostic), action: args[0] }) }); } catch { /* Fixed diagnostics only. */ }

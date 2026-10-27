@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AppError, generateDraft, requestModelText, safeModelDiagnostic } from '../lib/meta-api.mjs';
+import { AppError, generateDraft, requestModelText, safeModelDiagnostic, inspectModelAccess } from '../lib/meta-api.mjs';
 
 // Deliberately fake test-only sentinel; no real credential is used by these tests.
 const SENTINEL_KEY = 'unit-test-private-key-sentinel';
@@ -51,6 +51,82 @@ test('request uses configured Meta endpoint, backend bearer credential, no stora
   assert.equal(body.max_output_tokens, 128);
   assert.equal(body.tools, undefined);
   assert.ok(!JSON.stringify(result).includes(SENTINEL_KEY));
+});
+
+test('explicit model preflight uses the official endpoint and returns only unique safe Muse identifiers', async () => {
+  let calls = 0;
+  const result = await inspectModelAccess(config, { fetchImpl: async (url, options) => {
+    calls++;
+    assert.equal(url, 'https://api.meta.ai/v1/models');
+    assert.equal(options.method, 'GET');
+    assert.equal(options.redirect, 'error');
+    assert.equal(options.headers.Authorization, `Bearer ${SENTINEL_KEY}`);
+    assert.equal(options.headers.Accept, 'application/json');
+    assert.equal(options.body, undefined);
+    return jsonResponse({ object: 'list', account: 'PRIVATE_ACCOUNT', data: [
+      { id: config.model, owned_by: SENTINEL_KEY }, { id: 'muse-voice-transcribe-1.0' }, { id: config.model },
+      { id: 'sam-3.1' }, { id: 'muse-' }, { id: 'Muse-private' }, { id: 'muse-private/id' },
+      { id: 'muse-' + 'x'.repeat(96) }, { id: 'muse-private\n' }, { id: `muse-${SENTINEL_KEY}` }, { id: null }, null, ['muse-private'],
+    ] });
+  } });
+  assert.equal(calls, 1);
+  assert.deepEqual(result, { models: [config.model, 'muse-voice-transcribe-1.0'], configuredModelListed: true });
+  assert.ok(!JSON.stringify(result).includes(SENTINEL_KEY));
+  assert.ok(!JSON.stringify(result).includes('PRIVATE_ACCOUNT'));
+  assert.deepEqual(await inspectModelAccess(config, { fetchImpl: fakeFetch({ data: [{ id: 'muse-spark-1.3' }] }) }), {
+    models: ['muse-spark-1.3'], configuredModelListed: false,
+  });
+});
+
+test('model preflight validates configuration before network access and rejects malformed or excessive catalogues', async () => {
+  let calls = 0;
+  await rejectsSafely(() => inspectModelAccess({ ...config, apiKey: '' }, { fetchImpl: async () => { calls++; } }), 'MODEL_NOT_CONFIGURED');
+  await rejectsSafely(() => inspectModelAccess({ ...config, apiUrl: 'https://untrusted.invalid' }, { fetchImpl: async () => { calls++; } }), 'MODEL_CONFIG_ERROR');
+  assert.equal(calls, 0);
+  for (const payload of [null, [], {}, { data: {} }, { error: { message: SENTINEL_KEY }, data: [] }, {
+    data: Array.from({ length: 101 }, (_, index) => ({ id: `muse-test-${index}` })),
+  }]) {
+    await rejectsSafely(() => inspectModelAccess(config, { fetchImpl: fakeFetch(payload) }), 'MODEL_BAD_RESPONSE');
+  }
+  const repeated = { data: Array.from({ length: 101 }, () => ({ id: config.model })) };
+  assert.deepEqual(await inspectModelAccess(config, { fetchImpl: fakeFetch(repeated) }), { models: [config.model], configuredModelListed: true });
+});
+
+test('model preflight bounds body reads and preserves safe upstream diagnostics', async () => {
+  await assert.rejects(() => inspectModelAccess(config, { fetchImpl: fakeFetch({
+    error: { type: 'invalid_request_error', code: 'model_not_found', param: 'model', message: 'PRIVATE_PROVIDER_MESSAGE' },
+  }, 404) }), error => {
+    assert.equal(error.code, 'MODEL_BAD_RESPONSE');
+    assert.deepEqual(error.diagnostic, {
+      stage: 'upstream_http', reason: 'request_rejected', responseFormat: 'json', providerType: 'invalid_request_error', providerCode: 'model_not_found', providerParam: 'model', httpStatus: 404,
+    });
+    assert.ok(!JSON.stringify(error).includes('PRIVATE_PROVIDER_MESSAGE'));
+    return true;
+  });
+  await rejectsSafely(() => inspectModelAccess(config, { fetchImpl: async () => new Response('x'.repeat(1048577)) }), 'MODEL_BAD_RESPONSE');
+  await rejectsSafely(() => inspectModelAccess(config, { fetchImpl: async () => { throw new Error(SENTINEL_KEY); } }), 'MODEL_NETWORK_ERROR');
+});
+
+test('model preflight preserves timeout and cancellation before and during response body reads', async () => {
+  const alreadyCancelled = new AbortController();
+  alreadyCancelled.abort();
+  let calls = 0;
+  await rejectsSafely(() => inspectModelAccess(config, { signal: alreadyCancelled.signal, fetchImpl: async () => { calls++; } }), 'MODEL_CANCELLED');
+  assert.equal(calls, 0);
+  for (const cancelRequest of [false, true]) {
+    const controller = new AbortController();
+    let bodyCancelled = false;
+    await rejectsSafely(() => inspectModelAccess({ ...config, timeoutMs: 20 }, {
+      signal: controller.signal,
+      fetchImpl: async () => {
+        if (cancelRequest) setTimeout(() => controller.abort(), 5);
+        return new Response(new ReadableStream({
+          pull: () => new Promise(() => {}), cancel() { bodyCancelled = true; },
+        }));
+      },
+    }), cancelRequest ? 'MODEL_CANCELLED' : 'MODEL_TIMEOUT');
+    assert.equal(bodyCancelled, true);
+  }
 });
 
 test('parser reads all assistant output_text blocks, skipping leading reasoning and non-assistant messages', async () => {

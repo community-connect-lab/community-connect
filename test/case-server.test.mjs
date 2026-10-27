@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createHmac, randomUUID } from 'node:crypto';
+import { createHmac, createHash, randomUUID } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
 import { createCallingServer } from '../calling-server.mjs';
 import { AppError } from '../lib/meta-api.mjs';
@@ -133,6 +133,39 @@ test('case configuration is authenticated, useful and contains no runtime creden
   assert.equal(config.maxAudioSeconds, 300);
   assert.ok(config.maxAudioBytes > 0);
   for (const secret of secrets) assert.ok(!text.includes(secret));
+});
+
+test('explicit model access preflight is authenticated, cached and compares keys without exposing credentials or digests', async t => {
+  let checks = 0;
+  const context = await start(t, { inspectAccess: async (config, { signal }) => {
+    checks++; assert.equal(config.apiKey, MODEL_KEY); assert.equal(signal.aborted, false);
+    return { models: ['muse-wonder-1.0', 'muse-voice-transcribe-1.0'], configuredModelListed: true };
+  } });
+  assert.equal((await fetch(`${context.base}/agent/api/case/access`)).status, 401);
+  const digest = createHash('sha256').update(MODEL_KEY).digest('hex');
+  const response = await context.api('case/access', undefined, { 'X-Model-Key-Digest': digest });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('x-local-model-key-matches'), 'true');
+  const body = await response.json();
+  assert.equal(body.localKeyMatches, true); assert.equal(body.caseModelListed, true); assert.equal(body.transcriptionModelListed, true);
+  assert.deepEqual(body.availableModels, ['muse-wonder-1.0', 'muse-voice-transcribe-1.0']);
+  assert.ok(!JSON.stringify(body).includes(MODEL_KEY)); assert.ok(!JSON.stringify(body).includes(digest));
+  const different = await (await context.api('case/access', undefined, { 'X-Model-Key-Digest': '00'.repeat(32) })).json();
+  assert.equal(different.localKeyMatches, false); assert.equal(checks, 1);
+  const withoutDigest = await (await context.api('case/access')).json();
+  assert.equal(withoutDigest.localKeyMatches, undefined); assert.equal(checks, 1);
+  assert.equal((await context.api('case/access', undefined, { 'X-Model-Key-Digest': 'invalid' })).status, 400);
+  context.advance(60001); assert.equal((await context.api('case/access')).status, 200); assert.equal(checks, 2);
+  assert.equal(context.modelCalls.length, 0); assert.equal(context.asrBuffers.length, 0); assert.equal(context.actions.length, 0);
+});
+
+test('model key comparison remains available when the provider model catalogue rejects the request', async t => {
+  const context = await start(t, { inspectAccess: async () => { throw new AppError('MODEL_BAD_RESPONSE', 'Meta rejected the model access check.'); } });
+  const digest = createHash('sha256').update(MODEL_KEY).digest('hex');
+  const result = await context.api('case/access', undefined, { 'X-Model-Key-Digest': digest });
+  assert.equal(result.status, 502); assert.equal(result.headers.get('x-local-model-key-matches'), 'true');
+  const body = await result.text();
+  assert.ok(!body.includes(MODEL_KEY)); assert.ok(!body.includes(digest));
 });
 
 test('case routes inherit agent authentication and exact-origin mutation restrictions', async t => {
