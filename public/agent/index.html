@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#2f8a56">
+  <title>Community Connect · Call desk</title>
+  <link rel="stylesheet" href="/agent/styles.css">
+  <script type="module" src="/agent/app.mjs"></script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/agent" aria-label="Community Connect call desk"><span class="brand-mark" aria-hidden="true">c<span>c</span></span><span>Community <span class="brand-connect">Connect</span></span></a>
+    <span class="demo-badge">SYNTHETIC DEMO</span>
+  </header>
+  <main>
+    <section class="intro" aria-labelledby="page-title">
+      <div><p class="eyebrow">WHATSAPP / HUMAN-ANSWERED CALLS</p><h1 id="page-title">A conversation.<br><span>A person to help.</span></h1><p class="intro-copy">Answer an incoming test call, listen, and write your own notes. You decide when a conversation begins and ends.</p></div>
+      <aside class="boundary-card"><strong>Use a fictional support scenario.</strong><p>Audio is live. This desk does not record, transcribe, generate a voice response or place outbound calls.</p></aside>
+    </section>
+    <div class="workspace">
+      <section class="panel call-panel" aria-labelledby="desk-heading">
+        <div class="panel-heading"><div><p class="eyebrow">01 / CALL DESK</p><h2 id="desk-heading">You’re in control.</h2></div><span id="connection-badge" class="status-badge">DISCONNECTED</span></div>
+        <form id="connect-form" class="connect-form">
+          <label for="agent-token">Agent access token</label>
+          <p id="token-help">Use the dedicated agent token configured on your Calling gateway. Your WhatsApp and Model API tokens stay on the server.</p>
+          <div class="token-row"><input id="agent-token" type="password" autocomplete="off" spellcheck="false" autocapitalize="none" aria-describedby="token-help" minlength="32" maxlength="4096" required><button class="button button-purple" id="connect-button" type="submit">Connect desk</button></div>
+          <p class="fine-print">Held in this tab’s memory only. Reloading or disconnecting clears it.</p>
+        </form>
+        <div id="connected-controls" hidden>
+          <div class="readiness"><div><strong id="readiness-title">Get ready to listen.</strong><p id="readiness-help">Put on a headset, then allow microphone access when you choose Ready.</p></div><button class="button button-green" id="ready-button" type="button">Ready to receive</button></div>
+        </div>
+        <div class="call-stage" id="call-stage" data-state="idle" aria-labelledby="call-title">
+          <span class="call-symbol" aria-hidden="true">☎</span><p id="call-kicker" class="eyebrow">YOUR NEXT CONVERSATION</p><h3 id="call-title">Connect your desk to begin.</h3><p id="call-help">Only an incoming WhatsApp test call will appear here.</p>
+          <div class="call-actions" id="call-actions" hidden><button class="button button-green" id="answer-button" type="button">Answer call</button><button class="button button-outline" id="reject-button" type="button">Reject</button><button class="button button-danger" id="hangup-button" type="button" hidden>Hang up</button></div>
+          <button class="button button-outline play-audio" id="play-audio-button" type="button" hidden>Play caller audio</button>
+        </div>
+        <p class="activity" id="activity-status" role="status" aria-live="polite">Connect your desk, then choose Ready to receive.</p>
+        <p class="error-message" id="error-message" role="alert" hidden></p>
+        <div class="desk-footer"><span id="microphone-status">Microphone off</span><button class="text-button" id="disconnect-button" type="button" hidden>Disconnect desk</button></div>
+        <audio id="remote-audio" autoplay></audio>
+      </section>
+      <section class="panel notes-panel" aria-labelledby="notes-heading">
+        <div class="panel-heading"><div><p class="eyebrow">02 / YOUR NOTES</p><h2 id="notes-heading">Listen first. Write clearly.</h2></div><span class="small-badge">MANUAL NOTES</span></div>
+        <div class="scenario"><strong>A fictional community support enquiry</strong><p>For example, a caller asks to change a food-parcel collection time. Keep confirmed facts, open questions and proposed next steps distinct.</p></div>
+        <label for="agent-notes">Notes from your test conversation</label><textarea id="agent-notes" rows="13" maxlength="12000" spellcheck="true" aria-describedby="notes-help notes-count" placeholder="SYNTHETIC DEMO: What did the caller ask? What was confirmed? What still needs checking?"></textarea>
+        <div class="field-meta"><span id="notes-help">Synthetic details only. Notes stay in this tab.</span><span id="notes-count">0 / 12,000</span></div>
+        <div class="next-step"><p class="eyebrow">AFTER THE CONVERSATION</p><h3>From your notes to a reviewed case.</h3><p>Copy your notes into the local summary app. Review the draft before exporting it. Opening the app does not transfer these notes.</p><a class="button button-purple" href="http://localhost:3000" target="_blank" rel="noopener noreferrer">Open local summary app <span aria-hidden="true">↗</span></a><p class="fine-print">Start the notes app on your computer first. Reloading this page discards notes.</p></div>
+      </section>
+    </div>
+  </main>
+  <footer><span>Community Connect</span><span>Live audio. Manual notes. Human judgement.</span></footer>
+  <noscript><p class="error-message">Enable JavaScript to use the call desk.</p></noscript>
+</body>
+</html>

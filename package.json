@@ -8,6 +8,7 @@
   "scripts": {
     "start": "node server.mjs",
     "start:webhook": "node webhook-server.mjs",
+    "start:calling": "node calling-server.mjs",
     "check:api": "node scripts/check-api.mjs",
     "test": "node --test"
   }
