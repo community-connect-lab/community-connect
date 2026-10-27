@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AppError, generateDraft, requestModelText } from '../lib/meta-api.mjs';
+import { AppError, generateDraft, requestModelText, safeModelDiagnostic } from '../lib/meta-api.mjs';
 
 // Deliberately fake test-only sentinel; no real credential is used by these tests.
 const SENTINEL_KEY = 'unit-test-private-key-sentinel';
@@ -106,6 +106,85 @@ test('classifies upstream failures without relaying upstream bodies, headers, or
     await rejectsSafely(() => requestModelText(config, request, { fetchImpl: fakeFetch({ error: SENTINEL_KEY }, status) }), code);
   }
   await rejectsSafely(() => requestModelText(config, request, { fetchImpl: async () => { throw new Error(`network ${SENTINEL_KEY}`); } }), 'MODEL_NETWORK_ERROR');
+});
+
+test('model diagnostics copy only exact allowlisted own data values without invoking getters', () => {
+  let getterCalls = 0;
+  const value = Object.assign(Object.create({ providerCode: 'invalid_api_key' }), {
+    stage: 'upstream_http', reason: 'request_rejected', httpStatus: 402, responseFormat: 'json',
+    providerType: 'billing_error', providerParam: 'model', message: SENTINEL_KEY, rawBody: SENTINEL_KEY,
+  });
+  Object.defineProperty(value, 'providerCode', { get() { getterCalls++; return 'billing_not_configured'; } });
+  assert.deepEqual(safeModelDiagnostic(value), {
+    stage: 'upstream_http', reason: 'request_rejected', responseFormat: 'json', providerType: 'billing_error', providerParam: 'model', httpStatus: 402,
+  });
+  assert.equal(getterCalls, 0);
+  for (const invalid of [null, [], SENTINEL_KEY, { httpStatus: '402', stage: SENTINEL_KEY, responseFormat: 'application/json', providerType: SENTINEL_KEY, providerCode: SENTINEL_KEY, providerParam: 'input.private' }, { httpStatus: 600 }]) {
+    assert.deepEqual(safeModelDiagnostic(invalid), {});
+  }
+});
+
+test('upstream JSON errors preserve HTTP status and exact taxonomy without provider messages', async () => {
+  await assert.rejects(() => requestModelText(config, request, { fetchImpl: fakeFetch({
+    error: { type: 'billing_error', code: 'billing_not_configured', param: 'model', message: 'PRIVATE_PROVIDER_MESSAGE', request_id: 'PRIVATE_ID' },
+  }, 402) }), error => {
+    assert.equal(error.code, 'MODEL_BAD_RESPONSE');
+    assert.equal(error.status, 502);
+    assert.deepEqual(error.diagnostic, {
+      stage: 'upstream_http', reason: 'request_rejected', responseFormat: 'json', providerType: 'billing_error', providerCode: 'billing_not_configured', providerParam: 'model', httpStatus: 402,
+    });
+    assert.ok(!JSON.stringify(error).includes('PRIVATE_'));
+    return true;
+  });
+});
+
+test('unrecognized provider fields and a credential echo cannot enter model diagnostics', async () => {
+  for (const payload of [
+    { error: { type: SENTINEL_KEY, code: 'private_new_code', param: 'input.private', message: SENTINEL_KEY } },
+    { error: { type: 'billing_error', code: 'billing_not_configured', param: 'model', message: SENTINEL_KEY } },
+    { error: { type: ['billing_error'], code: { value: 'billing_not_configured' }, param: 123 } },
+  ]) {
+    await assert.rejects(() => requestModelText(config, request, { fetchImpl: fakeFetch(payload, 400) }), error => {
+      assert.deepEqual(error.diagnostic, { stage: 'upstream_http', reason: 'request_rejected', responseFormat: 'json', httpStatus: 400 });
+      assert.ok(!JSON.stringify(error).includes(SENTINEL_KEY));
+      return true;
+    });
+  }
+});
+
+test('HTML, unknown, malformed and oversized upstream errors retain their original classification', async () => {
+  for (const [response, format, status] of [
+    [new Response('<html>PRIVATE_PROVIDER_MESSAGE</html>', { status: 400, headers: { 'Content-Type': 'text/html; charset=utf-8' } }), 'html', 400],
+    [new Response('PRIVATE_PROVIDER_MESSAGE', { status: 404 }), 'other', 404],
+    [new Response('{malformed', { status: 422, headers: { 'Content-Type': 'application/json' } }), 'json', 422],
+    [new Response('x', { status: 401, headers: { 'Content-Type': 'application/json', 'Content-Length': '2000000' } }), 'json', 401],
+    [new Response('x'.repeat(1048577), { status: 403, headers: { 'Content-Type': 'application/problem+json' } }), 'json', 403],
+  ]) {
+    await assert.rejects(() => requestModelText(config, request, { fetchImpl: async () => response }), error => {
+      assert.equal(error.code, status === 401 || status === 403 ? 'MODEL_AUTH_ERROR' : 'MODEL_BAD_RESPONSE');
+      assert.deepEqual(error.diagnostic, { stage: 'upstream_http', reason: 'request_rejected', responseFormat: format, httpStatus: status });
+      assert.ok(!JSON.stringify(error).includes('PRIVATE_PROVIDER_MESSAGE'));
+      return true;
+    });
+  }
+});
+
+test('timeout and explicit cancellation still cover optional upstream error body reads', async () => {
+  for (const cancelRequest of [false, true]) {
+    const controller = new AbortController();
+    let bodyCancelled = false;
+    await rejectsSafely(() => requestModelText({ ...config, timeoutMs: 20 }, request, {
+      signal: controller.signal,
+      fetchImpl: async () => {
+        if (cancelRequest) setTimeout(() => controller.abort(), 5);
+        return new Response(new ReadableStream({
+          pull: () => new Promise(() => {}),
+          cancel() { bodyCancelled = true; },
+        }), { status: 402, headers: { 'Content-Type': 'application/json' } });
+      },
+    }), cancelRequest ? 'MODEL_CANCELLED' : 'MODEL_TIMEOUT');
+    assert.equal(bodyCancelled, true);
+  }
 });
 
 test('times out a stalled request and aborts the network operation', async () => {

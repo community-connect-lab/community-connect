@@ -276,6 +276,27 @@ test('transcription rejection exposes only fixed support diagnostics and leaves 
   assert.ok(buffers[1].every(byte => byte === 0));
 });
 
+test('model rejection exposes allowlisted support metadata without provider messages or credentials', async t => {
+  const events = [];
+  const context = await start(t, {
+    onDiagnostic: event => events.push(event),
+    generate: async () => {
+      const error = new AppError('MODEL_BAD_RESPONSE', 'Meta rejected the request. Your sources are preserved.');
+      error.diagnostic = { stage: 'upstream_http', reason: 'request_rejected', httpStatus: 402, responseFormat: 'json', providerType: 'billing_error', providerCode: 'billing_not_configured', providerParam: null, message: 'private-provider-sentinel', accessToken: MODEL_KEY };
+      throw error;
+    },
+  });
+  const rejected = await context.api('case/draft', sources());
+  assert.equal(rejected.status, 502);
+  const body = await rejected.json();
+  const expected = { stage: 'upstream_http', reason: 'request_rejected', httpStatus: 402, responseFormat: 'json', providerType: 'billing_error', providerCode: 'billing_not_configured' };
+  assert.equal(body.error.code, 'MODEL_BAD_RESPONSE');
+  assert.deepEqual(body.error.diagnostic, expected);
+  assert.deepEqual(events, [{ event: 'model_request_failed', code: 'MODEL_BAD_RESPONSE', ...expected }]);
+  assert.ok(!JSON.stringify([body, events]).includes('private-provider-sentinel'));
+  assert.ok(!JSON.stringify([body, events]).includes(MODEL_KEY));
+});
+
 test('invalid audio, unsupported type and declared oversized audio never reach the transcription provider', async t => {
   const { acceptedCall, upload, base, headers, asrBuffers } = await start(t);
   const id = await acceptedCall();
