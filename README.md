@@ -127,7 +127,7 @@ In Render:
 
 | Setting | Value |
 | --- | --- |
-| Name | `community-connect-webhook` or another available service name |
+| Name | `<your-webhook>` or another available service name |
 | Runtime | Node |
 | Branch | `main` |
 | Root Directory | Leave empty |
@@ -146,8 +146,8 @@ In Render:
 
 The webhook receiver does not need `MODEL_API_KEY` or `WHATSAPP_ACCESS_TOKEN`. Leave `PORT` to Render's provided environment. No disk or database is required for this receiver.
 
-4. Create/deploy the service. Check that `https://YOUR-SERVICE.onrender.com/health` returns HTTP 200 with `status: "ok"` and `callHandling: "not_implemented"`. The displayed service URL is authoritative; the example name is not a reserved URL.
-5. In **Community Connect → WhatsApp → Configuration**, set **Callback URL** to `https://YOUR-SERVICE.onrender.com/webhooks/whatsapp`. Enter the same `WHATSAPP_VERIFY_TOKEN` value and click **Verify and save**. Keep the existing apps' callbacks and subscriptions unchanged.
+4. Create/deploy the service. Check that `https://<your-webhook>.onrender.com/health` returns HTTP 200 with `status: "ok"` and `callHandling: "not_implemented"`. Replace `<your-webhook>` with your Render service name and use the URL shown by Render.
+5. In **Community Connect → WhatsApp → Configuration**, set **Callback URL** to `https://<your-webhook>.onrender.com/webhooks/whatsapp`. Enter the same `WHATSAPP_VERIFY_TOKEN` value and click **Verify and save**. Keep the existing apps' callbacks and subscriptions unchanged.
 6. Use Meta's dashboard webhook tests to verify delivery and inspect Render logs for the `whatsapp_webhook_received` count summary. A sample event for a different phone ID is acknowledged but counted as ignored when filtering is enabled. Failed signatures return 403; valid signed malformed payloads return 400. Never disable signature verification to make a test pass.
 
 Callback verification and a successful dashboard test do not establish end-to-end Calling. App publication and real incoming-message delivery are reported in the checkpoint below; real inbound-call delivery and two-way audio remain unverified.
@@ -155,13 +155,13 @@ Callback verification and a successful dashboard test do not establish end-to-en
 **User-verified account checkpoint — 27 October 2026 (not independently retested):**
 
 - The **Community Connect** Meta app is published. Its `calls` and `messages` webhook fields are subscribed using Graph API version `v26.0`.
-- The receiver at `https://community-connect-webhook.onrender.com` passed verification-token setup and Meta dashboard webhook tests. Render remains on the **Free** instance plan.
+- The receiver at `https://<your-webhook>.onrender.com` passed verification-token setup and Meta dashboard webhook tests. Render remains on the **Free** instance plan.
 - A real incoming WhatsApp reply was correlated with the Render log at `08:46:24`, showing `messages: 1` and `ignoredChanges: 0`.
 - `POST /PHONE_NUMBER_ID/settings` returned `success: true`. A following GET returned `calling.status: "ENABLED"`, `call_icon_visibility: "DEFAULT"` and `callback_permission_status: "DISABLED"`. `storage_configuration.status: "DEFAULT"` was unchanged. SIP status and Calling eligibility beyond the accepted settings remain unverified.
 
 The receiver's 18 utility/HTTP tests remain part of the passing suite. Its `callHandling: "not_implemented"` health value describes the historical receiver-only process. The Calling gateway has now replaced that process on Render, as checked below. Use an always-on service for reliable real-call testing; the last reported Free plan's sleep behaviour remains a limitation.
 
-**Render gateway checkpoint — 27 October 2026:** the user reports adding the missing `WHATSAPP_ACCESS_TOKEN` and successfully deploying revision `9be6f64`. Independent HTTP reads returned **200** from `https://community-connect-webhook.onrender.com/health` with `status: "ok"`, `service: "community-connect-calling"` and `callHandling: "agent_gateway"`; `/agent` also returned **200** and contained the Call desk and Connect desk interface text. These checks confirm startup and page delivery, not visual rendering, microphone access, Graph call actions or audio. Render was last reported as **Free**; no plan change was performed by this implementation.
+**Render gateway checkpoint — 27 October 2026:** the user reports adding the missing `WHATSAPP_ACCESS_TOKEN` and successfully deploying revision `9be6f64`. Independent HTTP reads returned **200** from `https://<your-webhook>.onrender.com/health` with `status: "ok"`, `service: "community-connect-calling"` and `callHandling: "agent_gateway"`; `/agent` also returned **200** and contained the Call desk and Connect desk interface text. These checks confirm startup and page delivery, not visual rendering, microphone access, Graph call actions or audio. Render was last reported as **Free**; no plan change was performed by this implementation.
 
 **First incoming-call attempt — 27 October 2026:** the user reports that the desk rang, Answer did not stop the caller's ringing, and the caller's hang-up ended the desk call. Render logs show `CALL_API_PERMISSION`. In that deployed revision this code maps Meta error code `10` or `200`; it establishes a call-control permission rejection, without identifying the precise scope/app/asset cause. Two-way audio remains unverified. The browser also retained the old setup error after termination; the local fixes above clear that stale state and label an unconnected call accurately.
 
@@ -202,19 +202,19 @@ git commit -m "Add human-answered inbound Calling gateway"
 git push origin main
 ```
 
-2. In the existing **community-connect-webhook** Render service, retain `WHATSAPP_VERIFY_TOKEN`, `WHATSAPP_APP_SECRET` and `WHATSAPP_PHONE_NUMBER_ID`. Add:
+2. In the existing Render webhook service, retain `WHATSAPP_VERIFY_TOKEN`, `WHATSAPP_APP_SECRET` and `WHATSAPP_PHONE_NUMBER_ID`. Add:
 
 | Variable | Render value |
 | --- | --- |
 | `WHATSAPP_ACCESS_TOKEN` | A valid Graph API token for this app and intended number; not the Model API key or App secret. |
 | `AGENT_ACCESS_TOKEN` | A new, distinct random secret of at least 32 characters, with no whitespace. |
 | `WHATSAPP_GRAPH_VERSION` | `v26.0` |
-| `CALLING_PUBLIC_ORIGIN` | `https://community-connect-webhook.onrender.com` — exact origin, no `/agent` path. |
+| `CALLING_PUBLIC_ORIGIN` | `https://<your-webhook>.onrender.com` — exact origin, no `/agent` path. |
 
 3. Set **Start Command** to `npm run start:calling`. Retain **Build Command** `npm ci --omit=dev` and **Health Check Path** `/health`. Use **one always-on instance** for the real call test: the broker lives in memory and does not support multiple instances. Render was last reported as Free; an always-on instance change has not been performed by this implementation. Let Render supply `PORT`; do not add the Model API key to this service.
-4. Deploy the reviewed GitHub revision. A public-repository connection requires a manual deploy for source changes. Check `https://community-connect-webhook.onrender.com/health` for HTTP 200, `status: "ok"` and `callHandling: "agent_gateway"`. This confirms which process is running; it does not verify Graph access or audio.
-5. Retain the existing Meta callback **`https://community-connect-webhook.onrender.com/webhooks/whatsapp`** and verification token. The gateway preserves its path and signed GET/POST handling; no replacement callback is needed. Preserve the published app's working subscriptions. Before the call test, inspect the intended number's current SIP configuration and shared-number/WABA routing. This gateway needs Graph/webhook signalling; do not overwrite unknown SIP settings or another project's routing to force a test.
-6. Open **https://community-connect-webhook.onrender.com/agent** and follow the desk flow below. HTTP page delivery is verified; browser microphone operation and the first real call remain manual verification steps.
+4. Deploy the reviewed GitHub revision. A public-repository connection requires a manual deploy for source changes. Check `https://<your-webhook>.onrender.com/health` for HTTP 200, `status: "ok"` and `callHandling: "agent_gateway"`. This confirms which process is running; it does not verify Graph access or audio.
+5. Retain the existing Meta callback **`https://<your-webhook>.onrender.com/webhooks/whatsapp`** and verification token. The gateway preserves its path and signed GET/POST handling; no replacement callback is needed. Preserve the published app's working subscriptions. Before the call test, inspect the intended number's current SIP configuration and shared-number/WABA routing. This gateway needs Graph/webhook signalling; do not overwrite unknown SIP settings or another project's routing to force a test.
+6. Open `https://<your-webhook>.onrender.com/agent` and follow the desk flow below. HTTP page delivery is verified; browser microphone operation and the first real call remain manual verification steps.
 
 ## Use the agent desk for a synthetic call test
 
