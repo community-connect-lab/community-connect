@@ -60,8 +60,10 @@
           <section class="panel transcript-panel" aria-labelledby="transcript-heading">
             <div class="panel-heading"><div><p class="eyebrow">03 / AFTER THE CALL</p><h2 id="transcript-heading">Call transcript</h2></div><span class="small-badge">CHECK &amp; CORRECT</span></div>
             <p id="transcription-info" class="source-intro">Connect the desk to check transcription availability.</p>
-            <label for="call-transcript">Editable speech-to-text</label><textarea id="call-transcript" rows="13" maxlength="36000" spellcheck="true" aria-describedby="transcript-origin transcript-count" placeholder="An agreed call capture can be transcribed here after the call. You can also paste a transcript you already have."></textarea>
+            <label for="call-transcript">Editable speech-to-text</label><textarea id="call-transcript" rows="13" maxlength="36000" spellcheck="true" aria-describedby="transcript-origin transcript-count transcription-status transcription-error" placeholder="An agreed call capture can be transcribed here after the call. You can also paste a transcript you already have."></textarea>
             <div class="field-meta"><span id="transcript-origin">No automatic transcript yet</span><span id="transcript-count">0 / 36,000</span></div>
+            <p class="activity" id="transcription-status" role="status" aria-live="polite"></p>
+            <p class="error-message" id="transcription-error" role="alert" hidden></p>
             <button class="text-button" id="retry-transcription" type="button" hidden>Retry captured-call transcription</button>
             <details id="original-transcript-panel" hidden><summary>Original machine transcript</summary><pre id="original-transcript"></pre></details>
           </section>

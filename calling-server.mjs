@@ -9,7 +9,7 @@ import { CallingError, callingEnvironment, readCallingConfig, parseCallingEvents
 import { CallStateError, createCallBroker } from './lib/calling-state.mjs';
 import { AppError } from './lib/meta-api.mjs';
 import { readConfig } from './lib/config.mjs';
-import { readTranscriptionConfig } from './lib/transcription.mjs';
+import { readTranscriptionConfig, safeTranscriptionDiagnostic } from './lib/transcription.mjs';
 import { CaseExportError } from './lib/case-export.mjs';
 import { createCaseService } from './lib/case-service.mjs';
 
@@ -161,7 +161,13 @@ export function createCallingServer(config, { sendAction = createCallingClient(c
       reply(response, 200, state);
     } catch (error) {
       const safe = error instanceof CallingError || error instanceof CallStateError || error instanceof WebhookError || error instanceof AppError || error instanceof CaseExportError ? error : new CallingError('INTERNAL_ERROR', 'The request could not be completed.', 500);
-      const diagnostic = safeCallingDiagnostic(safe.diagnostic);
+      const transcriptionDiagnostic = safeTranscriptionDiagnostic(safe.diagnostic);
+      const diagnostic = { ...safeCallingDiagnostic(safe.diagnostic), ...transcriptionDiagnostic };
+      if (Object.keys(transcriptionDiagnostic).length && typeof safe.code === 'string' && /^TRANSCRIPTION_[A-Z_]{1,70}$/.test(safe.code)) {
+        // Fixed codes/enums and HTTP status only: never provider bodies, keys,
+        // session IDs, recordings or recognized speech.
+        try { onDiagnostic({ event: 'transcription_failed', code: safe.code, ...transcriptionDiagnostic }); } catch { /* Diagnostics must not affect recovery. */ }
+      }
       if (!response.headersSent && !response.destroyed) reply(response, safe.status, { error: { code: safe.code, message: safe.message, ...(Object.keys(diagnostic).length ? { diagnostic } : {}) } });
       else if (!response.destroyed) response.end();
     }

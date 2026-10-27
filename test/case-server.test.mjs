@@ -246,6 +246,36 @@ test('failed transcription releases its busy guard for an explicit retry and zer
   assert.equal(buffers.length, 2);
 });
 
+test('transcription rejection exposes only fixed support diagnostics and leaves retry available', async t => {
+  const events = [], buffers = [];
+  let attempts = 0;
+  const context = await start(t, {
+    onDiagnostic: event => events.push(event),
+    transcribe: async audio => {
+      buffers.push(audio); attempts++;
+      if (attempts === 1) {
+        const error = new AppError('TRANSCRIPTION_REQUEST_REJECTED', 'Meta rejected the transcription upload. Your notes are preserved.');
+        error.diagnostic = { stage: 'upstream_http', reason: 'request_rejected', httpStatus: 400, transcript: 'private-speech-sentinel', sessionId: 'private-session-sentinel', accessToken: MODEL_KEY };
+        throw error;
+      }
+      return { transcript: TRANSCRIPT, turns: [], audioDurationMs: 1000, provenance: { kind: 'meta_transcription', model: 'muse-voice-transcribe-1.0', generatedAt: '2026-10-27T10:00:00Z' } };
+    },
+  });
+  const id = await context.acceptedCall();
+  const rejected = await context.upload(id);
+  assert.equal(rejected.status, 502);
+  const body = await rejected.json();
+  assert.equal(body.error.code, 'TRANSCRIPTION_REQUEST_REJECTED');
+  assert.deepEqual(body.error.diagnostic, { stage: 'upstream_http', reason: 'request_rejected', httpStatus: 400 });
+  assert.deepEqual(events, [{ event: 'transcription_failed', code: 'TRANSCRIPTION_REQUEST_REJECTED', stage: 'upstream_http', reason: 'request_rejected', httpStatus: 400 }]);
+  assert.ok(!JSON.stringify([body, events]).includes('private-'));
+  assert.ok(!JSON.stringify([body, events]).includes(MODEL_KEY));
+  assert.ok(buffers[0].every(byte => byte === 0));
+  assert.equal((await context.upload(id)).status, 200);
+  assert.equal(attempts, 2);
+  assert.ok(buffers[1].every(byte => byte === 0));
+});
+
 test('invalid audio, unsupported type and declared oversized audio never reach the transcription provider', async t => {
   const { acceptedCall, upload, base, headers, asrBuffers } = await start(t);
   const id = await acceptedCall();

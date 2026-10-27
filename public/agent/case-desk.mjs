@@ -16,8 +16,9 @@ export const CASE_ERROR_MESSAGES = Object.freeze({
   TRANSCRIPTION_CALL_REQUIRED: 'Transcription needs a recent accepted call from this desk. Its proof may have expired; continue with manual notes if needed.', TRANSCRIPTION_AGREEMENT_REQUIRED: 'Every participant must agree before captured audio is transcribed.', TRANSCRIPTION_ALREADY_COMPLETE: 'This call has already been transcribed. Use the existing transcript, or continue with manual notes if its response was lost.',
   TRANSCRIPTION_CALL_ACTIVE: 'The call has not finished at the gateway. Wait for call end before retrying transcription.', TRANSCRIPTION_EXPIRED: 'This call’s temporary transcription window expired. Continue with manual notes or paste a transcript you already have.',
   TRANSCRIPTION_BUSY: 'Another transcription is processing. Wait before retrying.', TRANSCRIPTION_RATE_LIMITED: 'The transcription limit or quota was reached. Wait before retrying.', TRANSCRIPTION_AUTH_ERROR: 'Meta did not accept transcription access. Check the backend key and account access; manual notes are preserved.', TRANSCRIPTION_MODEL_UNAVAILABLE: 'The transcription model is unavailable to this account. Manual notes still work.',
+  TRANSCRIPTION_REQUEST_REJECTED: 'Meta did not accept the transcription request. Check the gateway configuration and model access before retrying. Your notes are preserved.',
   TRANSCRIPTION_AUDIO_TOO_LARGE: 'Captured audio exceeds the upload limit. Continue with manual notes or use a shorter future capture.', TRANSCRIPTION_AUDIO_TOO_LONG: 'Captured audio exceeds the duration limit. Continue with manual notes or use a shorter future capture.', INVALID_TRANSCRIPTION_AUDIO: 'The recording was not a supported mono PCM WAV file. Manual notes are preserved.',
-  TRANSCRIPTION_TIMEOUT: 'Transcription took too long. Your manual notes are preserved; retry when ready.', TRANSCRIPTION_NETWORK_ERROR: 'The gateway could not reach Meta transcription. Your manual notes are preserved.', TRANSCRIPTION_UNAVAILABLE: 'Meta transcription is temporarily unavailable. Retry later or continue with notes.', TRANSCRIPTION_BAD_RESPONSE: 'Meta returned an invalid transcription. No text was substituted.', TRANSCRIPTION_EMPTY: 'Meta returned no speech text. Continue with manual notes or try a clearer future capture.', TRANSCRIPTION_CANCELLED: 'Transcription was cancelled. Your manual notes are preserved.',
+  TRANSCRIPTION_TIMEOUT: 'Transcription took too long. Your manual notes are preserved; retry when ready.', TRANSCRIPTION_NETWORK_ERROR: 'The gateway could not reach Meta transcription. Your manual notes are preserved.', TRANSCRIPTION_UNAVAILABLE: 'Meta transcription is temporarily unavailable. Retry later or continue with notes.', TRANSCRIPTION_BAD_RESPONSE: 'Meta could not provide a usable transcript. Your notes are preserved.', TRANSCRIPTION_EMPTY: 'Meta returned no speech text. Continue with manual notes or try a clearer future capture.', TRANSCRIPTION_CANCELLED: 'Transcription was cancelled. Your manual notes are preserved.',
 });
 const LIMITS = { notes: 12000, transcript: 36000 };
 export const CASE_REVIEW_STATEMENT = 'I compared this draft with the available sources, checked the facts, clearly flagged unresolved conflicts and uncertainty, and reviewed the proposed next steps and final case.';
@@ -111,7 +112,7 @@ export function createCaseDesk({ request, view = { render() {} }, workflow = new
   captureFactory = createAudioCapture, download = () => {}, confirmDiscard = () => false } = {}) {
   let connected = false, liveCall = null, sourceCallId = null, config = null, configRequest = null;
   let capture = null, preparedCapture = null, preparedProof = null, captureEpoch = 0, captureProof = null, stoppingCapture = null, wave = null, captureAgreement = false, captureState = 'off', seconds = 0;
-  let generating = false, transcribing = false, exporting = false, transcriptionRetryable = true, epoch = 0, message = 'Write manual notes during the call. Add an optional transcript after it ends.', error = '';
+  let generating = false, transcribing = false, exporting = false, transcriptionRetryable = true, epoch = 0, message = 'Write manual notes during the call. Add an optional transcript after it ends.', error = '', transcriptionError = '';
   const accepted = state => ['connecting', 'active', 'ending', 'uncertain'].includes(state);
   const hasWork = () => workflow.hasWork || Boolean(wave || capture || preparedCapture || stoppingCapture || transcribing || generating || exporting || workflow.pending);
   function clearEmptyCallBinding(callId) {
@@ -131,7 +132,7 @@ export function createCaseDesk({ request, view = { render() {} }, workflow = new
   const snapshot = () => ({ connected, liveCall: liveCall ? { ...liveCall } : null, config, notes: workflow.notes, transcript: workflow.transcript, originalTranscript: workflow.originalTranscript,
     draft: workflow.draft ? { ...workflow.draft } : null, provenance: workflow.provenance, transcriptionProvenance: workflow.transcriptionProvenance,
     reviewBlockReason: workflow.reviewBlockReason, reviewed: Boolean(workflow.reviewedAt), canExport: !workflow.reviewBlockReason && Boolean(workflow.reviewedAt),
-    hasWork: hasWork(), hasWorkingText: workflow.hasWork, sourceKind: workflow.sourceKind, transport: workflow.transport, generating, transcribing, exporting, captureAgreement, captureState, seconds, hasAudio: Boolean(wave), transcriptionRetryable, message, error });
+    hasWork: hasWork(), hasWorkingText: workflow.hasWork, sourceKind: workflow.sourceKind, transport: workflow.transport, generating, transcribing, exporting, captureAgreement, captureState, seconds, hasAudio: Boolean(wave), transcriptionRetryable, message, error, transcriptionError });
   const render = () => view.render(snapshot());
   const setError = caught => { error = errorCopy(caught); render(); };
   function setSource(name, value) { try { workflow.setSource(name, value); error = ''; render(); } catch (caught) { setError(caught); } }
@@ -151,7 +152,7 @@ export function createCaseDesk({ request, view = { render() {} }, workflow = new
       epoch++; config = null; configRequest = null; captureAgreement = false; captureEpoch++;
       if (workflow.pending) workflow.failDraft(workflow.pending);
       generating = transcribing = exporting = false;
-      void (capture ?? preparedCapture)?.dispose(); capture = preparedCapture = null; preparedProof = null; wave = null; captureProof = null; stoppingCapture = null; captureState = 'off'; message = 'Desk disconnected. Audio capture was discarded; your text is preserved.';
+      void (capture ?? preparedCapture)?.dispose(); capture = preparedCapture = null; preparedProof = null; wave = null; captureProof = null; stoppingCapture = null; captureState = 'off'; transcriptionError = ''; message = 'Desk disconnected. Audio capture was discarded; your text is preserved.';
     }
     render();
   }
@@ -219,19 +220,19 @@ export function createCaseDesk({ request, view = { render() {} }, workflow = new
   function discardAudio() {
     if (transcribing) return;
     captureEpoch++; void (capture ?? preparedCapture)?.dispose(); capture = preparedCapture = null; preparedProof = null; wave = null; captureProof = null; stoppingCapture = null;
-    captureAgreement = false; captureState = 'off'; seconds = 0; error = ''; message = 'Captured audio discarded. No transcription will be requested for this capture.'; render();
+    captureAgreement = false; captureState = 'off'; seconds = 0; error = ''; transcriptionError = ''; message = 'Captured audio discarded. No transcription will be requested for this capture.'; render();
   }
   async function transcribe() {
     if (!connected || !wave || !transcriptionRetryable || transcribing || accepted(liveCall?.state)) return;
     const currentWave = wave, currentEpoch = epoch;
-    if (currentWave.caseId !== workflow.id || !currentWave.callId || !(currentWave.blob instanceof Blob) || currentWave.blob.size > (config?.maxAudioBytes ?? MAX_CAPTURE_BYTES)) { wave = null; error = 'The captured call no longer belongs to this case.'; render(); return; }
-    transcribing = true; error = ''; workflow.reviewedAt = null; message = 'Transcribing the captured call with Meta. Manual notes remain editable.'; render();
+    if (currentWave.caseId !== workflow.id || !currentWave.callId || !(currentWave.blob instanceof Blob) || currentWave.blob.size > (config?.maxAudioBytes ?? MAX_CAPTURE_BYTES)) { wave = null; transcriptionError = 'The captured call no longer belongs to this case.'; render(); return; }
+    transcribing = true; error = ''; transcriptionError = ''; workflow.reviewedAt = null; message = 'Transcribing the captured call with Meta. Manual notes remain editable.'; render();
     try {
       const payload = await request('/case/transcribe', { method: 'POST', rawBody: currentWave.blob, contentType: 'audio/wav', headers: { 'X-Call-ID': currentWave.callId, 'X-Participants-Agreed': 'true' }, timeout: 250000 });
       if (currentEpoch !== epoch) return;
       const result = workflow.applyTranscript(currentWave, payload);
       wave = null; captureState = 'off'; message = result === 'inserted' ? 'Transcript ready. Correct it against your notes before creating the case draft.' : result === 'original_only' ? 'Your edited transcript was preserved. The original machine transcript is available for comparison.' : 'The old transcription was discarded because a new case is open.';
-    } catch (caught) { if (currentEpoch === epoch) { error = errorCopy(caught); transcriptionRetryable = !['TRANSCRIPTION_EXPIRED', 'TRANSCRIPTION_ALREADY_COMPLETE', 'TRANSCRIPTION_CALL_REQUIRED'].includes(caught?.publicCode); message = transcriptionRetryable ? 'Transcription did not complete. Manual notes are preserved; captured audio remains in memory for retry.' : 'This capture cannot be transcribed again. Continue with manual notes, or discard the audio.'; } }
+    } catch (caught) { if (currentEpoch === epoch) { transcriptionError = errorCopy(caught); transcriptionRetryable = !['TRANSCRIPTION_EXPIRED', 'TRANSCRIPTION_ALREADY_COMPLETE', 'TRANSCRIPTION_CALL_REQUIRED'].includes(caught?.publicCode); message = transcriptionRetryable ? 'Transcription did not complete. Manual notes are preserved; captured audio remains in memory for retry.' : 'This capture cannot be transcribed again. Continue with manual notes, or discard the audio.'; } }
     finally { if (currentEpoch === epoch) { transcribing = false; render(); } }
   }
   async function generate() {
@@ -262,7 +263,7 @@ export function createCaseDesk({ request, view = { render() {} }, workflow = new
     if (generating || transcribing || exporting || stoppingCapture || accepted(liveCall?.state) || ['recording', 'starting', 'stopping'].includes(captureState)) return false;
     if (hasWork() && !confirmDiscard()) return false;
     epoch++; captureEpoch++; void (capture ?? preparedCapture)?.dispose(); capture = preparedCapture = null; preparedProof = null; wave = null; sourceCallId = null; captureProof = null; transcriptionRetryable = true;
-    workflow.reset(); captureState = 'off'; captureAgreement = false; seconds = 0; error = ''; message = 'New case started. The previous case was cleared after your confirmation.';
+    workflow.reset(); captureState = 'off'; captureAgreement = false; seconds = 0; error = ''; transcriptionError = ''; message = 'New case started. The previous case was cleared after your confirmation.';
     if (connected && !config) { configRequest = null; void loadConfig(); }
     render(); return true;
   }
@@ -285,6 +286,8 @@ export function mountCaseDesk(document, { request, window = globalThis } = {}) {
     text('capture-status', state.transcribing ? 'Capture stopped · transcribing with Meta' : state.captureState === 'recording' ? `CAPTURING · ${Math.floor(state.seconds / 60)}:${String(Math.floor(state.seconds % 60)).padStart(2, '0')} / 5:00` : state.captureState === 'starting' ? 'Starting agreed capture…' : state.captureState === 'stopped' ? state.liveCall?.state === 'ended' ? 'Capture stopped · audio kept in memory' : 'Capture stopped · waiting for call end' : state.captureState === 'error' ? 'Capture unavailable · manual notes preserved' : state.captureState === 'stopping' ? 'Finalizing captured audio…' : state.captureAgreement ? 'Capture enabled — waiting for the call to connect.' : 'Optional capture is off');
     get('capture-status').dataset.recording = String(state.captureState === 'recording');
     get('retry-transcription').hidden = !state.hasAudio || !state.transcriptionRetryable || state.transcribing || acceptedForUi(state.liveCall?.state);
+    text('transcription-status', state.transcribing ? 'Transcribing captured audio with Meta…' : state.transcriptionError && state.hasAudio ? state.transcriptionRetryable ? 'Captured audio is kept in this tab. Retry when ready.' : 'Continue with manual notes, or discard this audio.' : state.hasAudio ? state.liveCall?.state === 'ended' ? 'Captured audio is ready to transcribe.' : 'Captured audio will be transcribed after the call ends.' : '');
+    text('transcription-error', state.transcriptionError); get('transcription-error').hidden = !state.transcriptionError;
     text('transcription-info', !state.connected ? 'Connect the desk to check transcription availability.' : !state.config ? 'Checking transcription availability…' : state.config.transcriptionConfigured ? 'Opt in before Answer. Captured audio is sent to Meta after the call ends, then cleared from this tab on success.' : 'Transcription is not configured. You can use manual notes or paste a transcript you already have.');
     get('original-transcript-panel').hidden = !state.originalTranscript; text('original-transcript', state.originalTranscript);
     text('transcript-origin', state.transcriptionProvenance ? `Meta transcript${state.originalTranscript !== state.transcript ? ' · edited by the agent' : ' · check for errors'}` : state.originalTranscript ? 'Original machine text retained · not attested for this draft' : 'No automatic transcript yet');

@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { AppError } from '../lib/meta-api.mjs';
 import {
   MAX_AUDIO_BYTES, MAX_TRANSCRIPT_CHARS, TRANSCRIPTION_API_URL, TRANSCRIPTION_MODEL,
-  readTranscriptionConfig, validateRawWav, transcribeAudio, checkTranscriptionModelAccess,
+  readTranscriptionConfig, validateRawWav, transcribeAudio, checkTranscriptionModelAccess, safeTranscriptionDiagnostic,
 } from '../lib/transcription.mjs';
 
 const KEY = 'synthetic-model-key-test-only-1234567890';
@@ -127,9 +127,56 @@ test('an empty successful ASR response is an explicit empty-transcription failur
 });
 
 test('upstream authentication, quota, rejection and unavailability errors never expose provider text', async () => {
-  for (const [status, expected] of [[401, 'TRANSCRIPTION_AUTH_ERROR'], [403, 'TRANSCRIPTION_AUTH_ERROR'], [429, 'TRANSCRIPTION_RATE_LIMITED'], [413, 'TRANSCRIPTION_AUDIO_TOO_LARGE'], [500, 'TRANSCRIPTION_UNAVAILABLE'], [400, 'TRANSCRIPTION_BAD_RESPONSE'], [302, 'TRANSCRIPTION_BAD_RESPONSE']]) {
-    await assert.rejects(transcribeAudio(wav(), config(), { fetchImpl: async () => new Response(`source-and-key-sentinel ${KEY}`, { status }) }), error => code(expected)(error) && !error.message.includes(KEY) && !error.message.includes('sentinel'));
+  for (const [status, expected] of [[401, 'TRANSCRIPTION_AUTH_ERROR'], [403, 'TRANSCRIPTION_AUTH_ERROR'], [429, 'TRANSCRIPTION_RATE_LIMITED'], [413, 'TRANSCRIPTION_AUDIO_TOO_LARGE'], [500, 'TRANSCRIPTION_UNAVAILABLE'], [400, 'TRANSCRIPTION_REQUEST_REJECTED'], [406, 'TRANSCRIPTION_REQUEST_REJECTED'], [422, 'TRANSCRIPTION_REQUEST_REJECTED'], [302, 'TRANSCRIPTION_BAD_RESPONSE']]) {
+    await assert.rejects(transcribeAudio(wav(), config(), { fetchImpl: async () => new Response(`source-and-key-sentinel ${KEY}`, { status }) }), error => {
+      assert.ok(code(expected)(error));
+      assert.ok(!error.message.includes(KEY) && !error.message.includes('sentinel'));
+      assert.deepEqual(error.diagnostic, { stage: 'upstream_http', reason: status >= 400 && status < 500 ? 'request_rejected' : 'unexpected_status', httpStatus: status });
+      return true;
+    });
   }
+});
+
+test('transcription diagnostics copy only fixed enums and bounded HTTP status without invoking getters', () => {
+  let accessed = false;
+  const diagnostic = { stage: 'response_schema', reason: 'invalid_turn_timing', httpStatus: 200, transcript: TEXT, sessionId: 'private-session-id', secret: KEY };
+  Object.defineProperty(diagnostic, 'message', { get() { accessed = true; return KEY; } });
+  assert.deepEqual(safeTranscriptionDiagnostic(diagnostic), { stage: 'response_schema', reason: 'invalid_turn_timing', httpStatus: 200 });
+  assert.equal(accessed, false);
+  for (const value of [null, [], { stage: KEY, reason: TEXT, httpStatus: 700 }, { stage: 'response_schema', get reason() { accessed = true; return KEY; }, httpStatus: 200.1 }]) {
+    const safe = safeTranscriptionDiagnostic(value);
+    assert.ok(!JSON.stringify(safe).includes(KEY) && !JSON.stringify(safe).includes(TEXT));
+    assert.ok(!Object.hasOwn(safe, 'httpStatus'));
+  }
+  assert.equal(accessed, false);
+});
+
+test('bad-response diagnostics distinguish JSON, safety and individual schema failures without source text', async () => {
+  const variants = [
+    ['{', 'response_json', 'invalid_json'],
+    [null, 'response_schema', 'invalid_envelope'],
+    [{ ...payload(), sessionId: null }, 'response_schema', 'invalid_session'],
+    [{ ...payload(), transcript: null }, 'response_schema', 'invalid_transcript'],
+    [{ ...payload(), transcript: KEY }, 'response_schema', 'unsafe_echo'],
+    [{ ...payload(), audioDurationMs: 99999999 }, 'response_schema', 'invalid_duration'],
+    [{ ...payload(), turns: null }, 'response_schema', 'invalid_turns'],
+    [{ ...payload(), turns: [null] }, 'response_schema', 'invalid_turns'],
+    [{ ...payload(), turns: [...payload().turns, ...payload().turns] }, 'response_schema', 'invalid_turn_id'],
+    [{ ...payload(), turns: [{ turnId: 1, startMs: 30, endMs: 10, transcript: TEXT }] }, 'response_schema', 'invalid_turn_timing'],
+    [{ ...payload(), turns: [{ ...payload().turns[0], transcript: null }] }, 'response_schema', 'invalid_turn_text'],
+    [{ ...payload(), turns: [{ ...payload().turns[0], transcript: 'x'.repeat(MAX_TRANSCRIPT_CHARS + 1) }] }, 'response_schema', 'turn_text_limit'],
+  ];
+  for (const [value, stage, reason] of variants) {
+    await assert.rejects(transcribeAudio(wav(), config(), { fetchImpl: async () => typeof value === 'string' ? new Response(value) : response(value) }), error => {
+      assert.ok(code('TRANSCRIPTION_BAD_RESPONSE')(error));
+      assert.deepEqual(error.diagnostic, { stage, reason, httpStatus: 200 });
+      assert.ok(!JSON.stringify(error.diagnostic).includes(KEY) && !JSON.stringify(error.diagnostic).includes(TEXT));
+      return true;
+    });
+  }
+  await assert.rejects(checkTranscriptionModelAccess(config(), { fetchImpl: async () => response({ data: null }) }), error => {
+    assert.deepEqual(error.diagnostic, { stage: 'model_visibility', reason: 'invalid_models', httpStatus: 200 }); return true;
+  });
 });
 
 test('invalid JSON, incomplete schemas, unsafe echoes and excessive transcript output are discarded', async () => {

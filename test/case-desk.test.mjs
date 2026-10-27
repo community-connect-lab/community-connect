@@ -142,7 +142,55 @@ test('failed audio-only transcription counts as work and requires confirmation b
   const f = deskFixture(t, { confirmed: false }); await f.connect(); f.desk.setCaptureAgreement(true); await f.acceptCall();
   f.handler = path => { if (path === '/case/transcribe') throw Object.assign(new Error('private-provider-sentinel'), { kind: 'action', publicCode: 'TRANSCRIPTION_AUTH_ERROR' }); };
   await f.endCall(); assert.equal(f.desk.snapshot().hasAudio, true); assert.equal(f.desk.snapshot().hasWork, true); assert.equal(f.desk.snapshot().hasWorkingText, false);
-  assert.equal(f.desk.newCase(), false); assert.equal(f.confirmations, 1); assert.equal(f.desk.snapshot().hasAudio, true); assert.ok(!f.desk.snapshot().error.includes('sentinel'));
+  assert.equal(f.desk.newCase(), false); assert.equal(f.confirmations, 1); assert.equal(f.desk.snapshot().hasAudio, true); assert.ok(!f.desk.snapshot().transcriptionError.includes('sentinel'));
+});
+
+test('transcription failure stays visible while notes and draft are edited; retry preserves work and inserts speech', async t => {
+  const f = deskFixture(t); await f.connect(); f.desk.setSource('notes', 'Original manual notes.'); f.desk.setCaptureAgreement(true); await f.acceptCall();
+  f.handler = path => { if (path === '/case/transcribe') throw Object.assign(new Error('private-provider-sentinel'), { kind: 'action', publicCode: 'TRANSCRIPTION_BAD_RESPONSE' }); };
+  await f.endCall();
+  const failure = f.desk.snapshot().transcriptionError;
+  assert.match(failure, /usable transcript/); assert.ok(!failure.includes('sentinel'));
+  assert.equal(f.desk.snapshot().error, '', 'ASR feedback belongs beside the transcript, not the case export controls');
+  assert.equal(f.desk.snapshot().hasAudio, true); assert.equal(f.model.notes, 'Original manual notes.');
+  f.desk.setSource('notes', 'Keep my newer manual notes.'); await f.desk.generate();
+  f.desk.setDraftField('nextSteps', 'Keep this human-edited draft.');
+  assert.equal(f.desk.snapshot().transcriptionError, failure); assert.equal(f.desk.snapshot().hasAudio, true);
+  f.handler = path => { if (path === '/case/draft') throw Object.assign(new Error('private-generation-sentinel'), { kind: 'action', publicCode: 'MODEL_UNAVAILABLE' }); };
+  await f.desk.generate();
+  assert.match(f.desk.snapshot().error, /drafting is temporarily unavailable/);
+  assert.equal(f.desk.snapshot().transcriptionError, failure, 'a separate case error does not erase the ASR failure');
+  const upload = deferred(); f.handler = path => path === '/case/transcribe' ? upload.promise : undefined;
+  const retry = f.desk.transcribe(); await until(() => f.desk.snapshot().transcribing);
+  assert.equal(f.desk.snapshot().transcriptionError, '');
+  upload.resolve(transcriptResponse('Recovered machine transcript.')); await retry;
+  assert.equal(f.desk.snapshot().transcriptionError, ''); assert.equal(f.desk.snapshot().hasAudio, false);
+  assert.equal(f.model.transcript, 'Recovered machine transcript.'); assert.equal(f.model.notes, 'Keep my newer manual notes.');
+  assert.equal(f.model.draft.nextSteps, 'Keep this human-edited draft.');
+});
+
+test('rejected transcription requests show safe inline guidance and retain notes and retry audio', async t => {
+  const f = deskFixture(t); await f.connect(); f.desk.setSource('notes', 'Keep these synthetic notes.'); f.desk.setCaptureAgreement(true); await f.acceptCall();
+  f.handler = path => { if (path === '/case/transcribe') throw Object.assign(new Error('private-provider-rejection-sentinel'), { kind: 'action', publicCode: 'TRANSCRIPTION_REQUEST_REJECTED' }); };
+  await f.endCall();
+  assert.match(f.desk.snapshot().transcriptionError, /did not accept the transcription request/);
+  assert.match(f.desk.snapshot().transcriptionError, /configuration and model access/);
+  assert.ok(!f.desk.snapshot().transcriptionError.includes('sentinel'));
+  assert.equal(f.desk.snapshot().error, ''); assert.equal(f.desk.snapshot().hasAudio, true); assert.equal(f.desk.snapshot().transcriptionRetryable, true);
+  assert.equal(f.model.notes, 'Keep these synthetic notes.'); assert.equal(f.model.transcript, '');
+});
+
+test('explicit audio/case reset and disconnection clear scoped transcription feedback', async t => {
+  for (const action of ['discard', 'new case', 'disconnect']) await t.test(action, async t => {
+    const f = deskFixture(t); await f.connect(); f.desk.setSource('notes', 'Keep these notes unless the case is explicitly cleared.'); f.desk.setCaptureAgreement(true); await f.acceptCall();
+    f.handler = path => { if (path === '/case/transcribe') throw Object.assign(new Error('private-provider-sentinel'), { kind: 'action', publicCode: 'TRANSCRIPTION_BAD_RESPONSE' }); };
+    await f.endCall(); assert.ok(f.desk.snapshot().transcriptionError); assert.equal(f.desk.snapshot().hasAudio, true);
+    if (action === 'discard') f.desk.discardAudio();
+    else if (action === 'new case') assert.equal(f.desk.newCase(), true);
+    else f.desk.setConnectionState({ connected: false, call: null });
+    assert.equal(f.desk.snapshot().transcriptionError, ''); assert.equal(f.desk.snapshot().hasAudio, false);
+    if (action !== 'new case') assert.equal(f.model.notes, 'Keep these notes unless the case is explicitly cleared.');
+  });
 });
 
 test('late generation and transcription cannot overwrite edits, including after disconnect/reset', async t => {
