@@ -49,7 +49,17 @@
         <audio id="remote-audio" autoplay></audio>
       </section>
       <div class="case-workspace">
-        <div class="case-toolbar"><p>One fictional case at a time. Save your work before starting another.</p><div><button class="text-button" id="save-working-notes" type="button" disabled>Save working copy</button><button class="button button-outline" id="new-case" type="button">New case</button></div></div>
+        <div class="case-toolbar">
+          <p>One fictional case at a time. Save your work before starting another.</p>
+          <div>
+            <button class="text-button" id="save-working-notes" type="button" disabled>Save working copy (.txt)</button>
+            <button class="button button-outline" id="save-resumable-notes" type="button" disabled aria-describedby="working-copy-help">Save to resume</button>
+            <button class="button button-outline" id="load-working-notes" type="button" aria-describedby="working-copy-help">Load saved notes</button>
+            <button class="button button-outline" id="new-case" type="button">New case</button>
+          </div>
+          <input id="working-copy-file" type="file" accept=".json,application/json" aria-label="Choose a saved Community Connect notes file" hidden>
+        </div>
+        <p id="working-copy-help" class="fine-print working-copy-help">Resumable files keep your notes and current transcript. Loading starts a new case that needs a fresh draft and human review.</p>
         <div class="source-panels">
           <section class="panel notes-panel" aria-labelledby="notes-heading">
             <div class="panel-heading"><div><p class="eyebrow">02 / DURING THE CALL</p><h2 id="notes-heading">Agent notes</h2></div><span class="small-badge">MANUAL</span></div>

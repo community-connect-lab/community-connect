@@ -1,4 +1,5 @@
 import { createAudioCapture, MAX_CAPTURE_BYTES, MAX_CAPTURE_SECONDS } from './audio-capture.mjs';
+import { MAX_WORKING_COPY_BYTES, parseWorkingCopy, serializeWorkingCopy } from './working-copy.mjs';
 
 export const CASE_FIELDS = Object.freeze(['enquiry', 'relevantDetails', 'uncertainties', 'nextSteps']);
 export const CASE_ERROR_MESSAGES = Object.freeze({
@@ -34,7 +35,7 @@ export class CaseDeskWorkflow {
   constructor({ uuid = () => crypto.randomUUID(), now = () => new Date().toISOString() } = {}) { this.uuid = uuid; this.now = now; this.reset(); }
   reset() {
     this.id = this.uuid(); this.notes = ''; this.transcript = ''; this.originalTranscript = ''; this.transcriptCallId = null; this.sourceCallId = null;
-    this.transport = 'manual_example'; this.draft = null; this.provenance = null; this.transcriptionProvenance = null; this.reviewedAt = null;
+    this.transport = 'manual_example'; this.draft = null; this.provenance = null; this.transcriptionProvenance = null; this.reviewedAt = null; this.restoredSources = false;
     this.sourceRevision = 0; this.transcriptRevision = 0; this.draftRevision = 0; this.requestSequence = 0; this.pending = null; this.lastSuccessfulRevision = -1; this.lastAttemptSucceeded = false;
   }
   get sourceKind() { return this.notes.trim() && this.transcript.trim() ? 'combined' : this.transcript.trim() ? 'transcript' : 'manual_notes'; }
@@ -109,11 +110,13 @@ export class CaseDeskWorkflow {
 const errorCopy = error => error?.kind === 'auth' ? 'Connect your desk again before using the case workspace.' : typeof error?.publicCode === 'string' && Object.hasOwn(CASE_ERROR_MESSAGES, error.publicCode) ? CASE_ERROR_MESSAGES[error.publicCode] : error?.kind === 'network' ? 'The gateway could not be reached. Your source text and edits are preserved.' : error instanceof Error && !error.kind ? error.message : 'The case request did not complete. Your source text and edits are preserved.';
 
 export function createCaseDesk({ request, view = { render() {} }, workflow = new CaseDeskWorkflow(),
-  captureFactory = createAudioCapture, download = () => {}, confirmDiscard = () => false } = {}) {
+  captureFactory = createAudioCapture, download = () => {}, confirmDiscard = () => false, confirmRestore = () => false } = {}) {
   let connected = false, liveCall = null, sourceCallId = null, config = null, configRequest = null;
   let capture = null, preparedCapture = null, preparedProof = null, captureEpoch = 0, captureProof = null, stoppingCapture = null, wave = null, captureAgreement = false, captureState = 'off', seconds = 0;
   let generating = false, transcribing = false, exporting = false, transcriptionRetryable = true, epoch = 0, message = 'Write manual notes during the call. Add an optional transcript after it ends.', error = '', transcriptionError = '';
+  let loadingWorkingCopy = false;
   const accepted = state => ['connecting', 'active', 'ending', 'uncertain'].includes(state);
+  const replacingBlocked = () => generating || transcribing || exporting || Boolean(stoppingCapture) || Boolean(liveCall && liveCall.state !== 'ended') || ['recording', 'starting', 'stopping'].includes(captureState);
   const hasWork = () => workflow.hasWork || Boolean(wave || capture || preparedCapture || stoppingCapture || transcribing || generating || exporting || workflow.pending);
   function clearEmptyCallBinding(callId) {
     if (!hasWork() && [sourceCallId, preparedProof?.callId, captureProof?.callId].some(id => id && id !== callId)) {
@@ -132,7 +135,8 @@ export function createCaseDesk({ request, view = { render() {} }, workflow = new
   const snapshot = () => ({ connected, liveCall: liveCall ? { ...liveCall } : null, config, notes: workflow.notes, transcript: workflow.transcript, originalTranscript: workflow.originalTranscript,
     draft: workflow.draft ? { ...workflow.draft } : null, provenance: workflow.provenance, transcriptionProvenance: workflow.transcriptionProvenance,
     reviewBlockReason: workflow.reviewBlockReason, reviewed: Boolean(workflow.reviewedAt), canExport: !workflow.reviewBlockReason && Boolean(workflow.reviewedAt),
-    hasWork: hasWork(), hasWorkingText: workflow.hasWork, sourceKind: workflow.sourceKind, transport: workflow.transport, generating, transcribing, exporting, captureAgreement, captureState, seconds, hasAudio: Boolean(wave), transcriptionRetryable, message, error, transcriptionError });
+    hasWork: hasWork(), hasWorkingText: workflow.hasWork, sourceKind: workflow.sourceKind, transport: workflow.transport, generating, transcribing, exporting, captureAgreement, captureState, seconds, hasAudio: Boolean(wave), transcriptionRetryable, message, error, transcriptionError,
+    loadingWorkingCopy, canLoadWorkingCopy: !loadingWorkingCopy && !replacingBlocked(), hasResumableSources: Boolean(workflow.notes.trim() || workflow.transcript.trim()), restoredSources: workflow.restoredSources });
   const render = () => view.render(snapshot());
   const setError = caught => { error = errorCopy(caught); render(); };
   function setSource(name, value) { try { workflow.setSource(name, value); error = ''; render(); } catch (caught) { setError(caught); } }
@@ -163,6 +167,7 @@ export function createCaseDesk({ request, view = { render() {} }, workflow = new
     error = ''; render();
   }
   function beforeAnswer() {
+    if (loadingWorkingCopy || workflow.restoredSources) { error = 'Saved notes are open or loading. Finish this case, then choose New case before answering another call.'; render(); return false; }
     clearEmptyCallBinding(liveCall?.id);
     if (refuseAnotherCall(liveCall?.id)) return false;
     if (!sourceCallId && (workflow.draft || workflow.transcript || workflow.originalTranscript)) { error = 'A previous case is still open. Save a working copy, then choose New case before answering another call.'; render(); return false; }
@@ -182,6 +187,7 @@ export function createCaseDesk({ request, view = { render() {} }, workflow = new
     return true;
   }
   async function onAcceptedCall({ callId, microphoneStream, remoteStream }) {
+    if (loadingWorkingCopy || workflow.restoredSources) { error = 'Saved notes belong to a separate case. Choose New case before using another call as a source.'; render(); return false; }
     clearEmptyCallBinding(callId);
     if (refuseAnotherCall(callId)) return false;
     sourceCallId = callId; workflow.sourceCallId = callId; workflow.transport = 'whatsapp'; workflow.sourceRevision++; workflow.reviewedAt = null;
@@ -236,7 +242,7 @@ export function createCaseDesk({ request, view = { render() {} }, workflow = new
     finally { if (currentEpoch === epoch) { transcribing = false; render(); } }
   }
   async function generate() {
-    if (!connected || !config?.apiConfigured || generating || transcribing || accepted(liveCall?.state)) return;
+    if (!connected || !config?.apiConfigured || generating || transcribing || loadingWorkingCopy || accepted(liveCall?.state)) return;
     let attempt; const currentEpoch = epoch;
     try { attempt = workflow.beginDraft(); generating = true; error = ''; message = 'Meta is creating an editable case draft from the current sources.'; render();
       const payload = await request('/case/draft', { method: 'POST', body: attempt.payload, timeout: 120000 });
@@ -247,7 +253,7 @@ export function createCaseDesk({ request, view = { render() {} }, workflow = new
   }
   function setReviewed(checked) { try { workflow.setReviewed(checked); error = ''; render(); } catch (caught) { setError(caught); } }
   async function exportReviewed(format = 'pdf', includeSources = false) {
-    if (!connected || exporting || generating || transcribing || !['pdf', 'docx', 'txt', 'pptx'].includes(format)) return;
+    if (!connected || exporting || generating || transcribing || loadingWorkingCopy || !['pdf', 'docx', 'txt', 'pptx'].includes(format)) return;
     const currentEpoch = epoch;
     try { const reviewed = workflow.exportCase(); const version = { source: workflow.sourceRevision, draft: workflow.draftRevision, generation: workflow.provenance?.generationId }; exporting = true; error = ''; render();
       const result = await request('/case/export', { method: 'POST', body: { format, includeSources: Boolean(includeSources), case: reviewed }, responseType: 'blob', timeout: 60000 });
@@ -259,24 +265,62 @@ export function createCaseDesk({ request, view = { render() {} }, workflow = new
     finally { if (currentEpoch === epoch) { exporting = false; render(); } }
   }
   function saveWorkingNotes() { const workingDraft = workflow.draft ? `\nUNREVIEWED WORKING DRAFT — not an approved case\n${CASE_FIELDS.map(field => `\n${{ enquiry: 'ENQUIRY', relevantDetails: 'RELEVANT DETAILS', uncertainties: 'UNCERTAINTIES', nextSteps: 'PROPOSED NEXT STEPS' }[field]}\n${workflow.draft[field]}\n`).join('')}` : ''; download(new Blob([`COMMUNITY CONNECT — WORKING SYNTHETIC COPY\nNot a reviewed case.\n\nMANUAL NOTES\n${workflow.notes}\n\nEDITED TRANSCRIPT\n${workflow.transcript}\n\nORIGINAL MACHINE TRANSCRIPT\n${workflow.originalTranscript}\n${workingDraft}`], { type: 'text/plain;charset=utf-8' }), 'community-connect-working-copy.txt'); }
-  function newCase() {
-    if (generating || transcribing || exporting || stoppingCapture || accepted(liveCall?.state) || ['recording', 'starting', 'stopping'].includes(captureState)) return false;
-    if (hasWork() && !confirmDiscard()) return false;
+  function resetCase(nextMessage) {
     epoch++; captureEpoch++; void (capture ?? preparedCapture)?.dispose(); capture = preparedCapture = null; preparedProof = null; wave = null; sourceCallId = null; captureProof = null; transcriptionRetryable = true;
-    workflow.reset(); captureState = 'off'; captureAgreement = false; seconds = 0; error = ''; transcriptionError = ''; message = 'New case started. The previous case was cleared after your confirmation.';
+    workflow.reset(); captureState = 'off'; captureAgreement = false; seconds = 0; error = ''; transcriptionError = ''; message = nextMessage;
     if (connected && !config) { configRequest = null; void loadConfig(); }
+  }
+  function saveResumableCopy() {
+    try {
+      const text = serializeWorkingCopy({ notes: workflow.notes, transcript: workflow.transcript }, workflow.now());
+      download(new Blob([text], { type: 'application/json;charset=utf-8' }), 'community-connect-resumable-notes-' + new Date().toISOString().replace(/[:.]/g, '-') + '.json');
+      error = ''; message = 'Resumable notes saved. Use Load saved notes to reopen the notes and current transcript; create a fresh draft and review before export.'; render(); return true;
+    } catch (caught) { setError(caught); return false; }
+  }
+  async function loadWorkingCopy(file) {
+    if (loadingWorkingCopy || replacingBlocked()) { error = 'Finish the current call or processing before loading saved notes.'; render(); return false; }
+    if (!file || !Number.isInteger(file.size) || file.size < 1 || file.size > MAX_WORKING_COPY_BYTES || typeof file.arrayBuffer !== 'function') {
+      error = 'Choose a resumable JSON file from Save to resume, no larger than 512 KB. The TXT working copy is a readable backup.'; render(); return false;
+    }
+    const currentEpoch = epoch, caseId = workflow.id, sourceRevision = workflow.sourceRevision, draftRevision = workflow.draftRevision;
+    const unchanged = () => currentEpoch === epoch && caseId === workflow.id && sourceRevision === workflow.sourceRevision && draftRevision === workflow.draftRevision && !replacingBlocked();
+    loadingWorkingCopy = true; error = ''; render();
+    try {
+      let content;
+      try {
+        const bytes = await file.arrayBuffer();
+        if (!(bytes instanceof ArrayBuffer) || bytes.byteLength > MAX_WORKING_COPY_BYTES) throw new Error();
+        content = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+      } catch { throw new Error('The saved file could not be read as UTF-8 text. Choose a resumable JSON file from Save to resume.'); }
+      const sources = parseWorkingCopy(content);
+      if (!unchanged()) throw new Error('The case changed while the file was opening. Your current work is preserved; choose the file again when ready.');
+      if (hasWork() && !confirmRestore()) { message = 'Loading cancelled. Your current work is unchanged.'; return false; }
+      if (!unchanged()) throw new Error('The case changed while the file was opening. Your current work is preserved; choose the file again when ready.');
+      resetCase('Saved notes loaded as a new case. Check the notes and pasted transcript, create a fresh Meta draft, then review before exporting.');
+      workflow.setSource('notes', sources.notes); workflow.setSource('transcript', sources.transcript); workflow.restoredSources = true;
+      return true;
+    } catch (caught) { if (currentEpoch === epoch) setError(caught); return false; }
+    finally { loadingWorkingCopy = false; render(); }
+  }
+  function newCase() {
+    if (loadingWorkingCopy || generating || transcribing || exporting || stoppingCapture || accepted(liveCall?.state) || ['recording', 'starting', 'stopping'].includes(captureState)) return false;
+    if (hasWork() && !confirmDiscard()) return false;
+    resetCase('New case started. The previous case was cleared after your confirmation.');
     render(); return true;
   }
   function dispose() { epoch++; captureEpoch++; void (capture ?? preparedCapture)?.dispose(); capture = preparedCapture = null; wave = null; }
   render();
-  return { snapshot, setConnectionState, setSource, setDraftField, setCaptureAgreement, beforeAnswer, onAcceptedCall, onRemoteStream, onAudioClosed: stopCapture, stopCapture, discardAudio, onCallEnded, transcribe, generate, setReviewed, exportReviewed, saveWorkingNotes, newCase, dispose };
+  return { snapshot, setConnectionState, setSource, setDraftField, setCaptureAgreement, beforeAnswer, onAcceptedCall, onRemoteStream, onAudioClosed: stopCapture, stopCapture, discardAudio, onCallEnded, transcribe, generate, setReviewed, exportReviewed, saveWorkingNotes, saveResumableCopy, loadWorkingCopy, newCase, dispose };
 }
 
 export function mountCaseDesk(document, { request, window = globalThis } = {}) {
   const get = id => document.getElementById(id);
   const text = (id, value) => { if (get(id).textContent !== value) get(id).textContent = value; };
   const download = (blob, filename) => { const url = URL.createObjectURL(blob), link = document.createElement('a'); link.href = url; link.download = filename; document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); };
-  const desk = createCaseDesk({ request, download, confirmDiscard: () => window.confirm('Start a new case and clear this tab’s notes, transcript, draft and any captured audio? Choose Cancel to save a working copy first. That download contains text only, not audio.'), view: { render(state) {
+  const desk = createCaseDesk({ request, download,
+    confirmDiscard: () => window.confirm('Start a new case and clear this tab’s notes, transcript, draft and any captured audio? Choose Cancel to save a working copy first. That download contains text only, not audio.'),
+    confirmRestore: () => window.confirm('Load saved notes as a new case? This replaces the current notes, transcript and draft, and discards any temporary audio. Choose Cancel to save your current work first.'),
+    view: { render(state) {
     if (get('agent-notes').value !== state.notes) get('agent-notes').value = state.notes;
     if (get('call-transcript').value !== state.transcript) get('call-transcript').value = state.transcript;
     text('notes-count', `${state.notes.length.toLocaleString()} / 12,000`); text('transcript-count', `${state.transcript.length.toLocaleString()} / 36,000`);
@@ -292,17 +336,21 @@ export function mountCaseDesk(document, { request, window = globalThis } = {}) {
     get('original-transcript-panel').hidden = !state.originalTranscript; text('original-transcript', state.originalTranscript);
     text('transcript-origin', state.transcriptionProvenance ? `Meta transcript${state.originalTranscript !== state.transcript ? ' · edited by the agent' : ' · check for errors'}` : state.originalTranscript ? 'Original machine text retained · not attested for this draft' : 'No automatic transcript yet');
     const both = state.sourceKind === 'combined'; text('merge-create', state.generating ? 'Creating draft…' : both ? 'Merge and create draft' : state.sourceKind === 'transcript' ? 'Create draft from transcript' : 'Create draft from notes');
-    get('merge-create').disabled = !state.connected || !state.config?.apiConfigured || state.generating || state.transcribing || acceptedForUi(state.liveCall?.state) || !(state.notes.trim() || state.transcript.trim());
+    get('merge-create').disabled = !state.connected || !state.config?.apiConfigured || state.generating || state.transcribing || state.loadingWorkingCopy || acceptedForUi(state.liveCall?.state) || !(state.notes.trim() || state.transcript.trim());
     text('case-model-status', !state.connected ? 'Connect your desk to create a Meta draft.' : !state.config ? 'Checking Meta configuration…' : state.config.apiConfigured ? `Meta Model API${state.config.model ? ` · ${state.config.model}` : ''}` : 'Meta drafting is not configured. Your notes remain available.');
     get('case-draft-fields').hidden = !state.draft; get('case-draft-empty').hidden = Boolean(state.draft);
     for (const field of CASE_FIELDS) { const input = get(`case-${field}`); if (state.draft && input.value !== state.draft[field]) input.value = state.draft[field]; }
     text('case-provenance', state.provenance ? `Meta Model API · ${state.provenance.model} · ${state.transport === 'whatsapp' ? 'live WhatsApp context' : 'manual example'} · human review required` : 'An editable draft will appear here.');
     text('case-review-help', state.reviewed ? 'Human review confirmed. Further source or draft edits require fresh approval.' : state.reviewBlockReason || 'Compare the draft with the available sources, check the facts, flag unresolved conflicts and review proposed next steps.');
     get('case-reviewed').checked = state.reviewed; get('case-reviewed').disabled = Boolean(state.reviewBlockReason) || state.transcribing;
-    get('export-reviewed').disabled = !state.connected || !state.canExport || state.exporting || state.generating || state.transcribing;
+    get('export-reviewed').disabled = !state.connected || !state.canExport || state.exporting || state.generating || state.transcribing || state.loadingWorkingCopy;
     text('export-reviewed', state.exporting ? 'Preparing download…' : 'Export reviewed case');
-    get('new-case').disabled = state.generating || state.transcribing || state.exporting || acceptedForUi(state.liveCall?.state) || ['recording', 'starting', 'stopping'].includes(state.captureState);
+    get('new-case').disabled = state.loadingWorkingCopy || state.generating || state.transcribing || state.exporting || acceptedForUi(state.liveCall?.state) || ['recording', 'starting', 'stopping'].includes(state.captureState);
     get('save-working-notes').disabled = !state.hasWorkingText;
+    get('save-resumable-notes').disabled = !state.hasResumableSources;
+    get('load-working-notes').disabled = !state.canLoadWorkingCopy;
+    text('load-working-notes', state.loadingWorkingCopy ? 'Loading notes…' : 'Load saved notes');
+    if (state.restoredSources && state.transcript.trim()) text('transcript-origin', 'Loaded transcript text · review against your notes');
     text('case-activity', state.message); text('case-error', state.error); get('case-error').hidden = !state.error;
   } } });
   get('agent-notes').addEventListener('input', event => desk.setSource('notes', event.target.value));
@@ -316,6 +364,9 @@ export function mountCaseDesk(document, { request, window = globalThis } = {}) {
   get('case-reviewed').addEventListener('change', event => desk.setReviewed(event.target.checked));
   get('export-reviewed').addEventListener('click', () => { void desk.exportReviewed(get('export-format').value, get('include-sources').checked); });
   get('save-working-notes').addEventListener('click', () => desk.saveWorkingNotes()); get('new-case').addEventListener('click', () => desk.newCase());
+  get('save-resumable-notes').addEventListener('click', () => desk.saveResumableCopy());
+  get('load-working-notes').addEventListener('click', () => { const input = get('working-copy-file'); input.value = ''; input.click(); });
+  get('working-copy-file').addEventListener('change', event => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void desk.loadWorkingCopy(file); });
   window.addEventListener('beforeunload', event => { if (desk.snapshot().hasWork) { event.preventDefault(); event.returnValue = ''; } });
   window.addEventListener('pagehide', () => desk.dispose());
   return desk;

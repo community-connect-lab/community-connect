@@ -110,6 +110,14 @@ The explicit upload uses the account's API allowance. It prints validation count
 
 The prototype has no case database or server-side audio archive. Use the working-copy download or reviewed exports to retain work. Drafting uses `store:false`; this is not a claim about every aspect of provider retention. Logs contain fixed diagnostic codes and aggregate webhook counts, not source text, SDP, phone numbers, credentials or raw provider bodies.
 
+## Save and resume notes
+
+**Save working copy (.txt)** still downloads a readable snapshot of notes, transcripts and any unreviewed working draft. To continue source text later, choose **Save to resume** to download a resumable JSON file, then **Load saved notes** on this or another computer. Saving and loading happen in the browser and make no model request.
+
+The resumable file contains only manual notes and the current editable transcript. Loading validates the file before replacing work and asks for confirmation if a case or temporary audio is already present. Invalid files, cancelled loading and edits made while a file is opening preserve current work. Files are limited to 512 KiB and the existing source-text limits.
+
+Loaded text starts a new manual case. Drafts, approval, original-machine transcript claims, recordings, credentials and call/generation receipts are not restored. Check the loaded text, create a fresh Meta draft and complete human review before exporting. Loading is blocked during calls or processing; choose **New case** before answering a call while restored notes are open.
+
 ## Checks
 
 ```sh

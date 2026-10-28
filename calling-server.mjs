@@ -72,6 +72,7 @@ export function createCallingServer(config, { sendAction = createCallingClient(c
     ['/agent/styles.css', ['public/agent/styles.css', 'text/css; charset=utf-8']],
     ['/agent/app.mjs', ['public/agent/app.mjs', 'text/javascript; charset=utf-8']],
     ['/agent/case-desk.mjs', ['public/agent/case-desk.mjs', 'text/javascript; charset=utf-8']],
+    ['/agent/working-copy.mjs', ['public/agent/working-copy.mjs', 'text/javascript; charset=utf-8']],
     ['/agent/audio-capture.mjs', ['public/agent/audio-capture.mjs', 'text/javascript; charset=utf-8']],
     ['/agent/pcm-capture-worklet.mjs', ['public/agent/pcm-capture-worklet.mjs', 'text/javascript; charset=utf-8']],
     ['/brand-icon.svg', ['assets/meta-app-icon.svg', 'image/svg+xml']],

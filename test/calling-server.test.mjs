@@ -42,7 +42,7 @@ test('gateway preserves callback verification and health; only explicit public a
   assert.equal(await (await fetch(`${base}/webhooks/whatsapp?${query}`)).text(), '12345');
   const health = await (await fetch(`${base}/health`)).json();
   assert.equal(health.callHandling, 'agent_gateway');
-  for (const path of ['/agent', '/agent/styles.css', '/agent/app.mjs']) {
+  for (const path of ['/agent', '/agent/styles.css', '/agent/app.mjs', '/agent/case-desk.mjs', '/agent/working-copy.mjs']) {
     const response = await fetch(base + path);
     assert.equal(response.status, 200);
     const body = await response.text();
