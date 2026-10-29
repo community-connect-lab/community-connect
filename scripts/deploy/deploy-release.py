@@ -67,6 +67,12 @@ def digest_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def incoming_archive(commit: str) -> Path:
+    # aws:downloadContent treats a nonexistent destinationPath as a filename.
+    # Keep that filename explicit and identical to the SSM document contract.
+    return STATE / 'incoming' / f'{commit}.tar.gz'
+
+
 def validate_archive(path: Path, commit: str, digest: str) -> tuple[dict, dict[str, bytes]]:
     """Validate every byte/path before creating any release files."""
     require(bool(re.fullmatch(r'[a-f0-9]{40}', commit)), 'INVALID_COMMIT')
@@ -334,11 +340,13 @@ def deploy(commit: str, digest: str) -> None:
         work = Path(tempfile.mkdtemp(prefix='work-', dir=STATE))
         try:
             # Copy before hashing: later SSM downloads cannot mutate this snapshot.
-            incoming = STATE / 'incoming' / commit / 'app.tar.gz'
-            require(not incoming.parent.is_symlink(), 'INCOMING_DIRECTORY_UNSAFE')
+            incoming = incoming_archive(commit)
+            require(incoming.parent.is_dir() and not incoming.parent.is_symlink()
+                    and incoming.parent.stat().st_uid == 0, 'INCOMING_DIRECTORY_UNSAFE')
             descriptor = os.open(incoming, os.O_RDONLY | os.O_NOFOLLOW)
             with os.fdopen(descriptor, 'rb') as source, (work / 'app.tar.gz').open('xb') as output:
-                require(stat.S_ISREG(os.fstat(source.fileno()).st_mode), 'ARCHIVE_NOT_REGULAR')
+                source_info = os.fstat(source.fileno())
+                require(stat.S_ISREG(source_info.st_mode) and source_info.st_uid == 0, 'ARCHIVE_NOT_REGULAR')
                 size = 0
                 while chunk := source.read(1024 * 1024):
                     size += len(chunk)
@@ -375,8 +383,8 @@ def main() -> int:
         return 0
     except DeployError as error:
         log(str(error))
-    except BaseException:
-        log('DEPLOYMENT_FAILED_WITHOUT_PRIVATE_DIAGNOSTICS')
+    except BaseException as error:
+        log('DEPLOYMENT_FAILED_WITHOUT_PRIVATE_DIAGNOSTICS', errorType=type(error).__name__)
     return 1
 
 

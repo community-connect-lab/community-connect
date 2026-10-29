@@ -24,7 +24,7 @@
         "onFailure": "exit",
         "sourceType": "S3",
         "sourceInfo": "{\"path\":\"https://community-connect-deploy-814462560346-eu-west-2.s3.eu-west-2.amazonaws.com/releases/{{ Commit }}/app.tar.gz\"}",
-        "destinationPath": "/var/lib/community-connect-deploy/incoming/{{ Commit }}"
+        "destinationPath": "/var/lib/community-connect-deploy/incoming/{{ Commit }}.tar.gz"
       }
     },
     {

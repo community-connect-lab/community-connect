@@ -236,6 +236,25 @@ class SsmDocumentChecks(unittest.TestCase):
         self.assertEqual(download['sourceType'], 'S3')
         self.assertEqual(json.loads(download['sourceInfo']), {'path': 'https://community-connect-deploy-814462560346-eu-west-2.s3.eu-west-2.amazonaws.com/releases/{{ Commit }}/app.tar.gz'})
 
+    def test_ssm_download_filename_matches_helper_input(self):
+        document = json.loads((SCRIPTS/'ssm-document.json').read_text(encoding='utf-8'))
+        destination = document['mainSteps'][0]['inputs']['destinationPath'].replace('{{ Commit }}', COMMIT)
+        self.assertEqual(destination, helper.incoming_archive(COMMIT).as_posix())
+        self.assertEqual(Path(destination).name, f'{COMMIT}.tar.gz')
+        self.assertEqual(Path(destination).parent.as_posix(), '/var/lib/community-connect-deploy/incoming')
+
+
+class PrivateDiagnosticChecks(unittest.TestCase):
+    def test_unexpected_failure_reports_exception_type_only(self):
+        sensitive_message = 'PRIVATE_SENTINEL_MUST_NOT_APPEAR'
+        with patch.object(helper.sys, 'argv', ['deploy-release.py', COMMIT, DIGEST]), \
+                patch.object(helper.signal, 'signal'), \
+                patch.object(helper, 'deploy', side_effect=FileNotFoundError(sensitive_message)), \
+                patch.object(helper, 'log') as output:
+            self.assertEqual(helper.main(), 1)
+            output.assert_called_once_with('DEPLOYMENT_FAILED_WITHOUT_PRIVATE_DIAGNOSTICS', errorType='FileNotFoundError')
+            self.assertNotIn(sensitive_message, repr(output.call_args))
+
 
 if __name__ == '__main__':
     unittest.main()
