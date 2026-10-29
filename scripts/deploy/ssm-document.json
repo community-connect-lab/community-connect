@@ -1,0 +1,44 @@
+{
+  "schemaVersion": "2.2",
+  "description": "Deploy one verified Community Connect release on the existing London host.",
+  "parameters": {
+    "Commit": {
+      "type": "String",
+      "description": "Full tested Git commit SHA.",
+      "allowedPattern": "^[a-f0-9]{40}$",
+      "interpolationType": "ENV_VAR"
+    },
+    "Digest": {
+      "type": "String",
+      "description": "SHA-256 of the exact uploaded app.tar.gz.",
+      "allowedPattern": "^[a-f0-9]{64}$",
+      "interpolationType": "ENV_VAR"
+    }
+  },
+  "mainSteps": [
+    {
+      "action": "aws:downloadContent",
+      "name": "DownloadRelease",
+      "precondition": { "StringEquals": ["platformType", "Linux"] },
+      "inputs": {
+        "onFailure": "exit",
+        "sourceType": "S3",
+        "sourceInfo": "{\"path\":\"https://community-connect-deploy-814462560346-eu-west-2.s3.eu-west-2.amazonaws.com/releases/{{ Commit }}/app.tar.gz\"}",
+        "destinationPath": "/var/lib/community-connect-deploy/incoming/{{ Commit }}"
+      }
+    },
+    {
+      "action": "aws:runShellScript",
+      "name": "DeployVerifiedRelease",
+      "precondition": { "StringEquals": ["platformType", "Linux"] },
+      "inputs": {
+        "onFailure": "exit",
+        "timeoutSeconds": "900",
+        "runCommand": [
+          "set -eu",
+          "exec /usr/local/sbin/community-connect-deploy \"$SSM_Commit\" \"$SSM_Digest\""
+        ]
+      }
+    }
+  ]
+}

@@ -334,7 +334,7 @@ export function mountCaseDesk(document, { request, window = globalThis } = {}) {
     text('transcription-error', state.transcriptionError); get('transcription-error').hidden = !state.transcriptionError;
     text('transcription-info', !state.connected ? 'Connect the desk to check transcription availability.' : !state.config ? 'Checking transcription availability…' : state.config.transcriptionConfigured ? 'Opt in before Answer. Captured audio is sent to Meta after the call ends, then cleared from this tab on success.' : 'Transcription is not configured. You can use manual notes or paste a transcript you already have.');
     get('original-transcript-panel').hidden = !state.originalTranscript; text('original-transcript', state.originalTranscript);
-    text('transcript-origin', state.transcriptionProvenance ? `Meta transcript${state.originalTranscript !== state.transcript ? ' · edited by the agent' : ' · check for errors'}` : state.originalTranscript ? 'Original machine text retained · not attested for this draft' : 'No automatic transcript yet');
+    text('transcript-origin', state.transcriptionProvenance ? `Meta transcript${state.originalTranscript !== state.transcript ? ' · edited by the agent' : ' · check for errors'}` : state.originalTranscript ? 'Original machine text retained · not attested for this draft' : state.transcript.trim() ? 'Manually entered/pasted test transcript · no automatic transcription' : 'No automatic transcript yet');
     const both = state.sourceKind === 'combined'; text('merge-create', state.generating ? 'Creating draft…' : both ? 'Merge and create draft' : state.sourceKind === 'transcript' ? 'Create draft from transcript' : 'Create draft from notes');
     get('merge-create').disabled = !state.connected || !state.config?.apiConfigured || state.generating || state.transcribing || state.loadingWorkingCopy || acceptedForUi(state.liveCall?.state) || !(state.notes.trim() || state.transcript.trim());
     text('case-model-status', !state.connected ? 'Connect your desk to create a Meta draft.' : !state.config ? 'Checking Meta configuration…' : state.config.apiConfigured ? `Meta Model API${state.config.model ? ` · ${state.config.model}` : ''}` : 'Meta drafting is not configured. Your notes remain available.');
@@ -350,7 +350,7 @@ export function mountCaseDesk(document, { request, window = globalThis } = {}) {
     get('save-resumable-notes').disabled = !state.hasResumableSources;
     get('load-working-notes').disabled = !state.canLoadWorkingCopy;
     text('load-working-notes', state.loadingWorkingCopy ? 'Loading notes…' : 'Load saved notes');
-    if (state.restoredSources && state.transcript.trim()) text('transcript-origin', 'Loaded transcript text · review against your notes');
+    if (state.restoredSources && state.transcript.trim()) text('transcript-origin', 'Loaded transcript text · no automatic transcription proof · review against your notes');
     text('case-activity', state.message); text('case-error', state.error); get('case-error').hidden = !state.error;
   } } });
   get('agent-notes').addEventListener('input', event => desk.setSource('notes', event.target.value));

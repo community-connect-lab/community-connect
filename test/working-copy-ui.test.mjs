@@ -110,6 +110,7 @@ test('Save to resume UI downloads source-only JSON while retaining the readable 
   const f = fixture(t);
   assert.equal(f.get('save-resumable-notes').disabled, true);
   await f.type('agent-notes', savedSources.notes); await f.type('call-transcript', savedSources.transcript);
+  assert.equal(f.get('transcript-origin').textContent, 'Manually entered/pasted test transcript · no automatic transcription');
   assert.equal(f.get('save-resumable-notes').disabled, false);
   await f.get('save-resumable-notes').click();
   assert.equal(f.document.downloads.length, 1);
@@ -135,7 +136,7 @@ test('Load saved notes UI replaces an approved draft with unapproved sources and
   assert.equal(f.get('working-copy-file').value, '');
   assert.equal(f.get('agent-notes').value, savedSources.notes);
   assert.equal(f.get('call-transcript').value, savedSources.transcript);
-  assert.match(f.get('transcript-origin').textContent, /Loaded transcript text/);
+  assert.equal(f.get('transcript-origin').textContent, 'Loaded transcript text · no automatic transcription proof · review against your notes');
   assert.ok(!f.get('transcript-origin').textContent.includes('Meta transcript'));
   assert.equal(f.get('original-transcript-panel').hidden, true);
   assert.equal(f.get('case-draft-fields').hidden, true);
