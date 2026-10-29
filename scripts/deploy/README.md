@@ -36,6 +36,9 @@ under `releases/`, plus send/get access for **CommunityConnectDeploy** on
 that one managed node. It cannot run arbitrary shell commands through another
 SSM document. The account owner installs the server helper and restricted SSM
 document separately. GitHub does not replace that helper or backend configuration.
+The host installer configures a root-owned launcher that resolves the physical
+Node entrypoint for both release and legacy directories, then reloads systemd.
+Installing it does not restart the app or change backend credentials or Caddy.
 
 ## What a deployment verifies
 
@@ -54,7 +57,13 @@ previous release. See the adjacent server helper and SSM document for details.
 
 The client polls the `DownloadRelease` and `DeployVerifiedRelease` SSM steps
 individually, sharing one 15-minute deadline. A failed download stops verification
-before the deploy step. After both steps succeed it checks
+before the deploy step. A fixed step can briefly report `InvalidPluginName` before
+SSM registers it; this and `InvocationDoesNotExist` are retried only while polling.
+Throttling, internal service errors and network timeouts during these read-only
+status requests also retry within the same deadline. Authorization errors fail
+without retrying. The report stores authored retry counts and codes, never raw
+AWS errors. SDK retries are disabled so an uncertain `SendCommand` cannot silently
+be sent twice. After both steps succeed it checks
 public HTTPS with normal certificate verification, validates `/health`, and
 compares `/agent` and `/agent/case-desk.mjs` with the packaged file hashes. The
 GitHub run summary records the selected commit, run URL, SSM command and server

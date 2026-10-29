@@ -5,8 +5,11 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
+import shlex
 import shutil
+import subprocess
 import tarfile
 import tempfile
 import unittest
@@ -254,6 +257,72 @@ class PrivateDiagnosticChecks(unittest.TestCase):
             self.assertEqual(helper.main(), 1)
             output.assert_called_once_with('DEPLOYMENT_FAILED_WITHOUT_PRIVATE_DIAGNOSTICS', errorType='FileNotFoundError')
             self.assertNotIn(sensitive_message, repr(output.call_args))
+
+
+class PhysicalLauncherChecks(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix='.offline-test-', dir=SCRIPTS))
+
+    def tearDown(self):
+        resolved = self.root.resolve()
+        self.assertEqual(resolved.parent, SCRIPTS.resolve())
+        self.assertTrue(resolved.name.startswith('.offline-test-'))
+        shutil.rmtree(resolved)
+
+    def directory_link(self, link, target):
+        try:
+            link.symlink_to(target, target_is_directory=True)
+        except OSError:
+            if os.name != 'nt':
+                raise
+            # Windows junctions reproduce Node's physical entrypoint resolution
+            # without requiring administrator-only symbolic-link privileges.
+            result = subprocess.run(['cmd.exe', '/d', '/c', 'mklink', '/J', str(link), str(target)],
+                                    capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, 'Could not create the isolated directory junction fixture')
+
+    def test_physical_launcher_runs_entrypoint_guard_for_release_and_legacy(self):
+        node = shutil.which('node')
+        self.assertIsNotNone(node, 'Node 22 is required for the deployment launcher regression check')
+        installer = (SCRIPTS/'install-deploy-helper.sh').read_text(encoding='utf-8')
+        launcher = installer.split("<<'LAUNCHER'\n", 1)[1].split('\nLAUNCHER\n', 1)[0] + '\n'
+        env_file = self.root/'private empty fixture.txt'
+        env_file.write_text('', encoding='utf-8')
+        for label in ['new release', 'preserved legacy']:
+            with self.subTest(target=label):
+                target = self.root/label
+                target.mkdir()
+                entrypoint = target/'calling-server.mjs'
+                entrypoint.write_text("import {resolve} from 'node:path';\nimport {fileURLToPath} from 'node:url';\nif (resolve(process.argv[1]) === fileURLToPath(import.meta.url)) console.log('ENTRYPOINT_STARTED');\n", encoding='utf-8')
+                link = self.root/('app link ' + label)
+                self.directory_link(link, target)
+                through_alias = subprocess.run([node, str(link/'calling-server.mjs')], capture_output=True, text=True, timeout=10)
+                self.assertEqual(through_alias.returncode, 0)
+                self.assertEqual(through_alias.stdout, '', 'The fixture must reproduce the clean-exit failure through the alias')
+                if os.name == 'nt':
+                    # The production POSIX readlink -f operation is Path.resolve
+                    # here; the same physical Node argv/import.meta guard runs.
+                    command = [node, '--env-file=' + str(env_file), str((link/'calling-server.mjs').resolve(strict=True))]
+                else:
+                    script = launcher.replace('/opt/community-connect/app/calling-server.mjs', shlex.quote(str(link/'calling-server.mjs')))
+                    script = script.replace('/opt/community-connect/node/bin/node', shlex.quote(node))
+                    script = script.replace('/etc/community-connect/backend.env', shlex.quote(str(env_file)))
+                    script_file = self.root/('launcher ' + label + '.sh')
+                    script_file.write_text(script, encoding='utf-8')
+                    command = ['/bin/sh', str(script_file)]
+                physical = subprocess.run(command, capture_output=True, text=True, timeout=10)
+                self.assertEqual(physical.returncode, 0)
+                self.assertEqual(physical.stdout.strip(), 'ENTRYPOINT_STARTED')
+
+    def test_installer_only_reloads_unit_and_preserves_existing_service_settings(self):
+        installer = (SCRIPTS/'install-deploy-helper.sh').read_text(encoding='utf-8')
+        self.assertIn('resolved_entrypoint=$(readlink -f -- /opt/community-connect/app/calling-server.mjs)', installer)
+        self.assertIn('exec /opt/community-connect/node/bin/node --env-file=/etc/community-connect/backend.env "$resolved_entrypoint"', installer)
+        unit = installer.split("<<'UNIT'\n", 1)[1].split('\nUNIT\n', 1)[0]
+        self.assertEqual(unit, '[Service]\nExecStart=\nExecStart=/usr/local/sbin/community-connect-run')
+        self.assertEqual([line.strip() for line in installer.splitlines() if line.strip().startswith('systemctl ')], ['systemctl daemon-reload'])
+        self.assertNotIn('WorkingDirectory=', unit)
+        self.assertNotIn('Environment=', unit)
 
 
 if __name__ == '__main__':

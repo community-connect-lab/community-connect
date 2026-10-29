@@ -26,6 +26,18 @@ NODE_PATTERN = re.compile(r'(?:mi-[0-9a-f]{17}|i-(?:[0-9a-f]{8}|[0-9a-f]{17}))\Z
 TERMINAL = {'Success', 'Cancelled', 'TimedOut', 'Failed'}
 PENDING = {'Pending', 'InProgress', 'Delayed', 'Cancelling'}
 PLUGINS = ('DownloadRelease', 'DeployVerifiedRelease')
+RETRYABLE_STATUS_READS = {'INVOCATION_NOT_YET_VISIBLE', 'PLUGIN_NOT_YET_VISIBLE', 'AWS_READ_TRANSIENT'}
+TRANSIENT_API_ERRORS = {
+    b'Throttling', b'ThrottlingException', b'TooManyRequestsException',
+    b'InternalServerError', b'InternalServerErrorException',
+    b'ServiceUnavailable', b'ServiceUnavailableException',
+    b'RequestTimeout', b'RequestTimeoutException',
+}
+NETWORK_READ_MARKERS = (
+    b'could not connect to the endpoint url', b'connect timeout on endpoint url',
+    b'read timeout on endpoint url', b'connection was closed before we received a valid response',
+    b'connection reset by peer', b'connection aborted',
+)
 
 
 class DeploymentError(Exception):
@@ -42,19 +54,37 @@ class AwsCLI:
     def __init__(self, region):
         self.region = region
 
-    def __call__(self, *args):
+    def __call__(self, *args, timeout=45):
+        status_read = args[:2] == ('ssm', 'get-command-invocation')
         try:
             result = subprocess.run(
                 ['aws', '--region', self.region, '--no-cli-pager', *args, '--output', 'json'],
-                capture_output=True, timeout=45, env={**os.environ, 'AWS_MAX_ATTEMPTS': '2'},
+                # SendCommand has no client idempotency token. Do not let the SDK
+                # silently issue another mutation after an uncertain response.
+                capture_output=True, timeout=timeout,
+                env={**os.environ, 'AWS_RETRY_MODE': 'standard', 'AWS_MAX_ATTEMPTS': '1'},
             )
+        except subprocess.TimeoutExpired:
+            raise AwsError('AWS_READ_TRANSIENT' if status_read else 'AWS_REQUEST_UNCERTAIN') from None
         except (OSError, subprocess.SubprocessError):
             raise AwsError('AWS_REQUEST_UNCERTAIN') from None
         if result.returncode:
             # Never print AWS stderr or SSM stdout; either can contain host data.
-            if b'InvocationDoesNotExist' in result.stderr:
-                raise AwsError('INVOCATION_NOT_YET_VISIBLE')
-            if b'PreconditionFailed' in result.stderr:
+            stderr = result.stderr or b''
+            match = re.search(rb'An error occurred \(([A-Za-z0-9_.-]{1,80})\)', stderr)
+            api_error = match[1] if match else None
+            if status_read:
+                if api_error == b'InvocationDoesNotExist':
+                    raise AwsError('INVOCATION_NOT_YET_VISIBLE')
+                if api_error == b'InvalidPluginName':
+                    # SSM can expose DownloadRelease before registering the next
+                    # fixed document step. Retry only this read, within deadline.
+                    raise AwsError('PLUGIN_NOT_YET_VISIBLE')
+                if api_error in TRANSIENT_API_ERRORS or any(marker in stderr.lower() for marker in NETWORK_READ_MARKERS):
+                    raise AwsError('AWS_READ_TRANSIENT')
+                if api_error in {b'AccessDenied', b'AccessDeniedException', b'UnauthorizedOperation'}:
+                    raise AwsError('AWS_READ_ACCESS_DENIED')
+            if api_error == b'PreconditionFailed':
                 raise AwsError('RELEASE_ALREADY_EXISTS')
             raise AwsError('AWS_REQUEST_FAILED')
         if len(result.stdout) > 1024 * 1024:
@@ -143,7 +173,7 @@ class Deployment:
         self.report_path = Path(report).resolve()
         self.report = {'schema': 1, 'commit': commit, 'origin': PUBLIC_ORIGIN, 'result': 'PREPARING',
                        'commandId': None, 'ssmStatus': None, 'ssmPlugin': None,
-                       'pluginStatus': {}, 'sendAttempted': False}
+                       'pluginStatus': {}, 'statusReadRetries': {}, 'sendAttempted': False}
 
     def save(self):
         self.report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -172,11 +202,16 @@ class Deployment:
             while self.clock() < stop_at:
                 try:
                     invocation = self.aws('ssm', 'get-command-invocation', '--command-id', self.report['commandId'],
-                                          '--instance-id', self.instance_id, '--plugin-name', plugin)
+                                          '--instance-id', self.instance_id, '--plugin-name', plugin,
+                                          timeout=min(45, stop_at - self.clock()))
                 except AwsError as error:
-                    if error.code == 'INVOCATION_NOT_YET_VISIBLE':
-                        self.sleep(5)
+                    if error.code in RETRYABLE_STATUS_READS:
+                        self.report['statusReadRetries'][plugin] = self.report['statusReadRetries'].get(plugin, 0) + 1
+                        self.report['lastStatusReadRetryCode'] = error.code
+                        self.save()
+                        self.sleep(min(5, max(0, stop_at - self.clock())))
                         continue
+                    self.report['statusReadFailureCode'] = error.code
                     raise DeploymentError('COMMAND_STATUS_UNCERTAIN') from None
                 status = invocation.get('Status')
                 if (invocation.get('CommandId') != self.report['commandId'] or invocation.get('InstanceId') != self.instance_id
@@ -191,7 +226,7 @@ class Deployment:
                     if status != 'Success' or invocation.get('ResponseCode') != 0:
                         raise DeploymentError('REMOTE_DOWNLOAD_FAILED' if plugin == 'DownloadRelease' else 'REMOTE_DEPLOYMENT_FAILED')
                     break
-                self.sleep(5)
+                self.sleep(min(5, max(0, stop_at - self.clock())))
             else:
                 # This role intentionally cannot cancel unrelated project commands.
                 # The command may continue; keep its ID and require reinspection.
