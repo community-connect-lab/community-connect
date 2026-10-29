@@ -46,6 +46,10 @@ temp/
 *.swo
 *~
 
+# Python deployment-tool caches.
+__pycache__/
+*.py[cod]
+
 # Local editor and operating-system files.
 .vscode/
 .idea/

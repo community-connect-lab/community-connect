@@ -73,7 +73,7 @@ Use a Node web service on your preferred host. Replace `<your webhook server url
 
 Build with `npm ci --omit=dev`, start with `npm run start:calling`, and set backend variables through the host's environment settings. Preserve a working Meta callback and verification token during an upgrade. Subscribe the intended app/account to `calls` and to `messages` if messaging is also being tested. Calling must be enabled for the intended number. An enabled setting or delivered webhook does not itself prove Graph call-control permissions.
 
-Use one running instance: desk ownership, call state and case receipts are in memory. A sleeping free instance can delay signalling; an always-on instance is appropriate for dependable calls. Restarting or deploying interrupts call state and invalidates case receipts, so save work first. This repository contains no deployment-specific domain.
+Use one running instance: desk ownership, call state and case receipts are in memory. A sleeping free instance can delay signalling; an always-on instance is appropriate for dependable calls. Restarting or deploying interrupts call state and invalidates case receipts, so save work first. The project's [controlled AWS deployment workflow](scripts/deploy/README.md) runs tests before a manually requested release and restores the previous release if its health check fails.
 
 The health response identifies `community-connect-calling` and `agent_gateway`. Adding the Model API key enables the new features without changing the Calling start command. Missing model configuration does not prevent the Call desk from starting.
 

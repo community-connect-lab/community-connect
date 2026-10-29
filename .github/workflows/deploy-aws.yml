@@ -1,0 +1,108 @@
+name: Deploy AWS
+run-name: AWS deployment requested by ${{ github.actor }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: 'Optional full 40-character main-history commit for rollback; blank uses this main commit'
+        required: false
+        type: string
+        default: ''
+      confirm_restart:
+        description: 'I saved working notes and disconnected all desks; this restarts the app and invalidates call/case receipts'
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aws-production
+  cancel-in-progress: false
+
+jobs:
+  test-selected-commit:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    outputs:
+      commit: ${{ steps.target.outputs.commit }}
+    steps:
+      - name: Check out trusted deployment controls from this main workflow commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: control
+      - name: Resolve a full commit and require main ancestry before any AWS authentication
+        id: target
+        env:
+          REQUESTED_COMMIT: ${{ inputs.commit }}
+          CONTROL_COMMIT: ${{ github.sha }}
+        run: |
+          target=$(python3 control/scripts/deploy/package-release.py --repo control --commit "$REQUESTED_COMMIT" --default-commit "$CONTROL_COMMIT" --resolve-only)
+          printf 'commit=%s\n' "$target" >> "$GITHUB_OUTPUT"
+      - name: Check out selected app commit on this unprivileged test runner
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.target.outputs.commit }}
+          persist-credentials: false
+          path: release-source
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          check-latest: true
+          package-manager-cache: false
+      - run: npm ci
+        working-directory: release-source
+      - run: npm test
+        working-directory: release-source
+      - name: Test trusted deployment controls
+        run: python3 -m unittest discover -s control/scripts/deploy/tests -v
+      - name: Test trusted host deployment controls
+        run: python3 -m unittest discover -s control/scripts/deploy -p 'test_deploy_release.py' -v
+      - name: Record restart gate
+        if: ${{ !inputs.confirm_restart }}
+        run: echo 'Tests passed. No AWS deployment requested because confirm_restart was false.' >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    needs: test-selected-commit
+    if: github.ref == 'refs/heads/main' && inputs.confirm_restart
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment:
+      name: aws-production
+      url: https://community-connect-16-61-223-171.sslip.io/agent
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_DEPLOY_REGION: ${{ vars.AWS_DEPLOY_REGION || 'eu-west-2' }}
+      AWS_DEPLOY_BUCKET: ${{ vars.AWS_DEPLOY_BUCKET || 'community-connect-deploy-814462560346-eu-west-2' }}
+      AWS_DEPLOY_INSTANCE_ID: ${{ vars.AWS_DEPLOY_INSTANCE_ID }}
+      SELECTED_COMMIT: ${{ needs.test-selected-commit.outputs.commit }}
+      CONTROL_COMMIT: ${{ github.sha }}
+    steps:
+      - name: Fresh trusted controls; selected app tests ran without cloud credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: control
+      - name: Build deterministic allowlisted runtime from the tested commit
+        run: python3 control/scripts/deploy/package-release.py --repo control --commit "$SELECTED_COMMIT" --default-commit "$CONTROL_COMMIT" --output "$RUNNER_TEMP/deploy/app.tar.gz"
+      - name: Obtain short-lived AWS credentials with GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_DEPLOY_REGION }}
+          allowed-account-ids: '814462560346'
+          role-session-name: cc-${{ github.run_id }}-${{ github.run_attempt }}
+          role-duration-seconds: 1800
+          mask-aws-account-id: true
+      - name: Upload once, deploy through restricted SSM document, verify public UI
+        run: python3 control/scripts/deploy/deploy-aws.py --archive "$RUNNER_TEMP/deploy/app.tar.gz" --commit "$SELECTED_COMMIT" --instance-id "$AWS_DEPLOY_INSTANCE_ID" --bucket "$AWS_DEPLOY_BUCKET" --region "$AWS_DEPLOY_REGION" --report "$RUNNER_TEMP/deploy/report.json"
