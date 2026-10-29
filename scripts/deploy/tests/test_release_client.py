@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import subprocess
 import tarfile
 import tempfile
 import unittest
@@ -57,7 +58,7 @@ class FakeAWS:
         self.send_error = send_error
         self.existing = existing
 
-    def __call__(self, *args):
+    def __call__(self, *args, timeout=45):
         self.calls.append(args)
         if args[:2] == ('s3api', 'put-object'):
             if self.existing is not None:
@@ -75,6 +76,8 @@ class FakeAWS:
             plugin = args[args.index('--plugin-name') + 1]
             states = self.states[plugin]
             status = states.pop(0) if len(states) > 1 else states[0]
+            if isinstance(status, client.AwsError):
+                raise status
             if status == 'NOT_VISIBLE':
                 raise client.AwsError('INVOCATION_NOT_YET_VISIBLE')
             return {'CommandId': COMMAND, 'InstanceId': INSTANCE, 'DocumentName': client.DOCUMENT, 'PluginName': plugin,
@@ -229,6 +232,40 @@ class DeploymentLifecycleTests(unittest.TestCase):
             self.assertEqual(clock.value, 10)
             self.assertEqual(deployment.report['pluginStatus']['DownloadRelease'], 'Success')
 
+    def test_unregistered_next_plugin_and_transient_reads_keep_the_same_command(self):
+        with tempfile.TemporaryDirectory() as directory:
+            clock = Clock()
+            aws = FakeAWS((client.AwsError('PLUGIN_NOT_YET_VISIBLE'), client.AwsError('AWS_READ_TRANSIENT'), 'Success'))
+            deployment = self.deployment(Path(directory), aws, clock=clock.now, sleep=clock.sleep, public_check=lambda manifest: None)
+            with contextlib.redirect_stdout(io.StringIO()):
+                report = deployment.run()
+            self.assertEqual(report['result'], 'DEPLOYED_AND_PUBLIC_UI_VERIFIED')
+            self.assertEqual(report['statusReadRetries'], {'DeployVerifiedRelease': 2})
+            self.assertEqual(sum(call[:2] == ('ssm', 'send-command') for call in aws.calls), 1)
+            for call in aws.calls:
+                if call[:2] == ('ssm', 'get-command-invocation'):
+                    self.assertEqual(call[call.index('--command-id') + 1], COMMAND)
+
+    def test_persistent_plugin_visibility_failure_stops_at_shared_deadline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            clock, aws = Clock(), FakeAWS((client.AwsError('PLUGIN_NOT_YET_VISIBLE'),))
+            deployment = self.deployment(Path(directory), aws, clock=clock.now, sleep=clock.sleep, deadline=7)
+            with contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(client.DeploymentError, 'REINSPECT_BEFORE_RETRY'):
+                deployment.run()
+            self.assertEqual(clock.value, 7)
+            self.assertEqual(deployment.report['commandId'], COMMAND)
+            self.assertEqual(sum(call[:2] == ('ssm', 'send-command') for call in aws.calls), 1)
+
+    def test_status_access_denied_is_not_retried_and_command_id_is_preserved(self):
+        with tempfile.TemporaryDirectory() as directory:
+            aws = FakeAWS((client.AwsError('AWS_READ_ACCESS_DENIED'),))
+            deployment = self.deployment(Path(directory), aws)
+            with contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(client.DeploymentError, 'COMMAND_STATUS_UNCERTAIN'):
+                deployment.run()
+            self.assertEqual(deployment.report['statusReadFailureCode'], 'AWS_READ_ACCESS_DENIED')
+            self.assertEqual(deployment.report['commandId'], COMMAND)
+            self.assertEqual(sum(call[:2] == ('ssm', 'get-command-invocation') for call in aws.calls), 2)
+
     def test_existing_release_with_different_bytes_cannot_be_overwritten_or_deployed(self):
         with tempfile.TemporaryDirectory() as directory:
             aws = FakeAWS(existing={'ContentLength': 1, 'Metadata': {'sha256': 'f' * 64, 'commit': COMMIT}})
@@ -236,6 +273,42 @@ class DeploymentLifecycleTests(unittest.TestCase):
             with self.assertRaisesRegex(client.DeploymentError, 'EXISTING_RELEASE_DIFFERS'):
                 deployment.run()
             self.assertFalse(any(call[:2] == ('ssm', 'send-command') for call in aws.calls))
+
+
+class AwsCLIRetryTests(unittest.TestCase):
+    def test_only_documented_read_failures_are_classified_for_bounded_retry(self):
+        aws = client.AwsCLI(client.REGION)
+        for provider_code, expected in ((b'InvalidPluginName', 'PLUGIN_NOT_YET_VISIBLE'),
+                                        (b'InvocationDoesNotExist', 'INVOCATION_NOT_YET_VISIBLE'),
+                                        (b'ThrottlingException', 'AWS_READ_TRANSIENT'),
+                                        (b'InternalServerError', 'AWS_READ_TRANSIENT'),
+                                        (b'AccessDeniedException', 'AWS_READ_ACCESS_DENIED')):
+            result = subprocess.CompletedProcess([], 1, stdout=b'', stderr=b'An error occurred (' + provider_code + b') when calling GetCommandInvocation: SYNTHETIC_PRIVATE_SENTINEL')
+            with self.subTest(provider_code=provider_code), patch.object(client.subprocess, 'run', return_value=result):
+                with self.assertRaises(client.AwsError) as caught:
+                    aws('ssm', 'get-command-invocation', '--plugin-name', 'DeployVerifiedRelease')
+                self.assertEqual(caught.exception.code, expected)
+                self.assertNotIn('SYNTHETIC_PRIVATE', str(caught.exception))
+
+    def test_sdk_retries_are_disabled_for_send_and_timeout_never_resends_it(self):
+        aws = client.AwsCLI(client.REGION)
+        with patch.object(client.subprocess, 'run', side_effect=subprocess.TimeoutExpired('aws', 45)) as run:
+            with self.assertRaisesRegex(client.AwsError, 'AWS_REQUEST_UNCERTAIN'):
+                aws('ssm', 'send-command', '--document-name', client.DOCUMENT)
+            self.assertEqual(run.call_count, 1)
+            self.assertEqual(run.call_args.kwargs['env']['AWS_MAX_ATTEMPTS'], '1')
+        with patch.object(client.subprocess, 'run', side_effect=subprocess.TimeoutExpired('aws', 3)) as run:
+            with self.assertRaisesRegex(client.AwsError, 'AWS_READ_TRANSIENT'):
+                aws('ssm', 'get-command-invocation', '--plugin-name', 'DeployVerifiedRelease', timeout=3)
+            self.assertEqual(run.call_args.kwargs['timeout'], 3)
+
+    def test_network_status_read_failure_is_transient_without_exposing_url(self):
+        result = subprocess.CompletedProcess([], 255, stdout=b'', stderr=b'Read timeout on endpoint URL: https://SYNTHETIC_PRIVATE_URL')
+        with patch.object(client.subprocess, 'run', return_value=result):
+            with self.assertRaises(client.AwsError) as caught:
+                client.AwsCLI(client.REGION)('ssm', 'get-command-invocation', '--plugin-name', 'DeployVerifiedRelease')
+            self.assertEqual(caught.exception.code, 'AWS_READ_TRANSIENT')
+            self.assertNotIn('SYNTHETIC_PRIVATE', str(caught.exception))
 
 
 if __name__ == '__main__':

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Install trusted host tooling only. Does not restart or reconfigure the app.
+# Install trusted deployment tooling and configure the physical-path launcher.
+# Does not restart the app or change backend credentials/Caddy configuration.
 set -euo pipefail
 if [[ $EUID != 0 ]]; then
   printf 'Run this installer as root.\n' >&2
@@ -24,4 +25,24 @@ WRAPPER
 chown root:root /usr/local/sbin/community-connect-deploy.new
 chmod 0755 /usr/local/sbin/community-connect-deploy.new
 mv -f -- /usr/local/sbin/community-connect-deploy.new /usr/local/sbin/community-connect-deploy
-printf 'DEPLOY_HELPER_INSTALLED: app and proxy were not restarted or reconfigured.\n'
+cat > /usr/local/sbin/community-connect-run.new <<'LAUNCHER'
+#!/bin/sh
+set -eu
+resolved_entrypoint=$(readlink -f -- /opt/community-connect/app/calling-server.mjs)
+test -f "$resolved_entrypoint"
+exec /opt/community-connect/node/bin/node --env-file=/etc/community-connect/backend.env "$resolved_entrypoint"
+LAUNCHER
+chown root:root /usr/local/sbin/community-connect-run.new
+chmod 0755 /usr/local/sbin/community-connect-run.new
+mv -f -- /usr/local/sbin/community-connect-run.new /usr/local/sbin/community-connect-run
+install -d -o root -g root -m 0755 /etc/systemd/system/community-connect.service.d
+cat > /etc/systemd/system/community-connect.service.d/50-verified-launcher.conf.new <<'UNIT'
+[Service]
+ExecStart=
+ExecStart=/usr/local/sbin/community-connect-run
+UNIT
+chown root:root /etc/systemd/system/community-connect.service.d/50-verified-launcher.conf.new
+chmod 0644 /etc/systemd/system/community-connect.service.d/50-verified-launcher.conf.new
+mv -f -- /etc/systemd/system/community-connect.service.d/50-verified-launcher.conf.new /etc/systemd/system/community-connect.service.d/50-verified-launcher.conf
+systemctl daemon-reload
+printf 'DEPLOY_HELPER_INSTALLED: trusted launcher configured; app and proxy not restarted; backend credentials untouched.\n'
