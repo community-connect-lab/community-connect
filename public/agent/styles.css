@@ -13,3 +13,16 @@ main{max-width:1640px}.site-header{max-width:1640px}.workspace{grid-template-col
 @media(max-width:1250px){.source-panels{grid-template-columns:1fr}.source-intro{min-height:0}.source-panels textarea{min-height:220px}.workspace{grid-template-columns:minmax(280px,.9fr) minmax(0,1.4fr)}.case-toolbar,.merge-toolbar{align-items:flex-start;flex-direction:column}.case-draft-grid{grid-template-columns:1fr}.case-export{align-items:stretch}.case-export>.button{margin-left:0}.case-panel{padding:22px}}
 @media(max-width:800px){.workspace{grid-template-columns:1fr}.call-panel{position:static}.source-panels{grid-template-columns:1fr 1fr}.case-toolbar{flex-direction:row;align-items:center}.source-panels textarea{min-height:260px}.case-draft-grid{grid-template-columns:1fr 1fr}.intro{padding-top:30px;padding-bottom:28px}.call-panel .call-stage{min-height:210px}}
 @media(max-width:580px){.source-panels,.case-draft-grid{grid-template-columns:1fr}.case-toolbar{flex-direction:column;align-items:stretch}.case-toolbar>div{justify-content:space-between}.source-panels textarea{min-height:240px}.merge-toolbar>.button{width:100%}.case-export{flex-direction:column}.case-export select,.case-export>.button{width:100%}.include-sources{max-width:none}.panel-heading .small-badge{font-size:8px}.case-panel,.source-panels .panel{padding:18px}}
+
+/* Readable working text at 100% zoom, within the existing desk layout. */
+.intro{padding:24px 0}
+.source-panels textarea,.case-draft-grid textarea{font-size:18px;line-height:1.6}
+.source-panels textarea{height:352px}
+.source-panels label,.case-draft-grid label{font-size:16px;line-height:1.5}
+.source-intro{font-size:14px;line-height:1.6}
+.source-panels .field-meta{flex-wrap:wrap;gap:4px 15px;font-size:12px;line-height:1.5}
+.case-provenance{font-size:13px;line-height:1.6}
+.case-review .check-row,.case-export label{font-size:14px;line-height:1.6}
+.case-review>p{font-size:12px}
+.case-export select{font-size:16px}
+@media(max-width:800px){.intro{padding:22px 0}}
